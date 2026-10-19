@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fall Line Studio</title>
+  <meta name="description" content="Search any ski area and design laser-ready SVG engravings of its trails, terrain and stats." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M2 27 13 7l6 10 3-4 8 14z' fill='%231d3557'/%3E%3Cpath d='M13 7l-3 6 2-1 1 2 2-2 2 1z' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 27 13 7l6 10 3-4 8 14z" /><path class="snow" d="M13 7l-3 6 2-1 1 2 2-2 2 1z" /></svg>
+      <div>
+        <h1>Fall Line Studio</h1>
+        <p>Ski-trail engravings, ready for xTool Studio</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-export-svg" class="btn primary" disabled>Download SVG</button>
+      <button id="btn-export-png" class="btn" disabled>PNG mockup</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel" id="panel">
+      <section class="card" id="sec-search">
+        <h2>1 · Find a ski area</h2>
+        <form id="search-form" class="search" autocomplete="off">
+          <input id="search-input" type="search" placeholder="e.g. Mount Snow, Zermatt, Niseko" aria-label="Ski area name" />
+          <button class="btn primary" type="submit">Search</button>
+        </form>
+        <div class="chips" id="quick-picks"></div>
+        <div id="search-status" class="status" role="status" aria-live="polite"></div>
+        <ul id="search-results" class="results"></ul>
+      </section>
+
+      <section class="card" id="sec-product">
+        <h2>2 · Product</h2>
+        <div class="templates" id="templates"></div>
+        <label class="field">Size
+          <select id="size"></select>
+        </label>
+        <div class="row hidden" id="custom-size">
+          <label class="field">Width (mm)<input type="number" id="custom-w" min="20" max="600" step="0.1" /></label>
+          <label class="field">Height (mm)<input type="number" id="custom-h" min="20" max="600" step="0.1" /></label>
+        </div>
+      </section>
+
+      <section class="card" id="sec-art">
+        <h2>3 · Trail artwork</h2>
+        <div class="segmented" id="view-mode">
+          <button type="button" data-value="3d">Mountain view</button>
+          <button type="button" data-value="map">Top-down map</button>
+        </div>
+        <label class="field">Terrain
+          <select id="terrain"></select>
+        </label>
+        <label class="field range">Rotate <output id="azimuth-out"></output>
+          <span class="range-row"><input type="range" id="azimuth" min="-180" max="180" step="1" /><button type="button" class="btn tiny" id="azimuth-auto" title="Face the mountain from its base">Auto</button></span>
+        </label>
+        <div class="only-3d">
+          <label class="field range">Camera tilt <output id="pitch-out"></output><input type="range" id="pitch" min="8" max="70" step="1" /></label>
+          <label class="field range">Relief <output id="exaggeration-out"></output><input type="range" id="exaggeration" min="1" max="3.5" step="0.1" /></label>
+          <label class="field range only-ridges">Ridgelines <output id="ridgeCount-out"></output><input type="range" id="ridgeCount" min="16" max="110" step="1" /></label>
+          <label class="check"><input type="checkbox" id="isolate" /> Isolate the mountain (fade surrounding terrain)</label>
+        </div>
+        <div class="only-map">
+          <label class="field">Contour interval
+            <select id="contourInterval">
+              <option value="0">Auto</option>
+              <option value="10">10 m</option>
+              <option value="20">20 m</option>
+              <option value="25">25 m</option>
+              <option value="50">50 m</option>
+              <option value="100">100 m</option>
+              <option value="15.24">50 ft</option>
+              <option value="30.48">100 ft</option>
+              <option value="60.96">200 ft</option>
+            </select>
+          </label>
+        </div>
+        <label class="field range">Trail smoothing <output id="smooth-out"></output><input type="range" id="smooth" min="0" max="3" step="1" /></label>
+        <label class="field">Lifts
+          <select id="liftStyle">
+            <option value="dashed">Dashed lines</option>
+            <option value="solid">Solid lines</option>
+            <option value="none">Hide lifts</option>
+          </select>
+        </label>
+        <div class="row">
+          <label class="field range">Art size <output id="zoom-out"></output><input type="range" id="zoom" min="0.5" max="1.4" step="0.01" /></label>
+          <label class="field range">Nudge up/down <output id="offsetY-out"></output><input type="range" id="offsetY" min="-0.3" max="0.3" step="0.01" /></label>
+        </div>
+        <div class="row">
+          <label class="field">Favourite run
+            <select id="highlight"><option value="">None</option></select>
+          </label>
+          <label class="field">Marker
+            <select id="highlightMarker">
+              <option value="star">Star</option>
+              <option value="heart">Heart</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card" id="sec-text">
+        <h2>4 · Text</h2>
+        <label class="field">Title<input type="text" id="t-title" maxlength="60" /></label>
+        <label class="field">Location line<input type="text" id="t-subtitle" maxlength="80" /></label>
+        <label class="field">Personal message <small>(script font, optional)</small><input type="text" id="t-personal" maxlength="60" placeholder="e.g. Our first run together · 2026" /></label>
+        <div class="only-ticket">
+          <label class="field">Ticket header<input type="text" id="t-header" maxlength="60" /></label>
+          <label class="field">Stub text<input type="text" id="t-stub" maxlength="24" /></label>
+        </div>
+        <div class="row">
+          <label class="field">Title font<select id="titleFont"></select></label>
+          <label class="field">Detail font<select id="bodyFont"></select></label>
+        </div>
+        <label class="field range">Title size <output id="titleScale-out"></output><input type="range" id="titleScale" min="0.6" max="1.4" step="0.01" /></label>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="smallCaps" /> Small caps title</label>
+          <label class="check"><input type="checkbox" id="border" /> Border</label>
+          <label class="check"><input type="checkbox" id="dividers" /> Stat dividers</label>
+        </div>
+      </section>
+
+      <section class="card" id="sec-stats">
+        <h2>5 · Stats</h2>
+        <p class="hint">Values come from OpenStreetMap and terrain data. Tick what to print; type in a box to override (e.g. the resort's advertised trail count).</p>
+        <div class="stat-grid" id="stat-grid"></div>
+        <div class="row">
+          <label class="field">Units
+            <select id="units"><option value="ft">Feet</option><option value="m">Metres</option></select>
+          </label>
+          <label class="field">Difficulty symbols
+            <select id="convention">
+              <option value="north_america">North America ● ■ ◆</option>
+              <option value="europe">Europe (colours)</option>
+              <option value="japan">Japan (colours)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="showCoords" /> Coordinates</label>
+          <label class="check only-ticket"><input type="checkbox" id="showSerial" /> Serial no.</label>
+        </div>
+        <div class="row">
+          <label class="field">Format
+            <select id="coordStyle"><option value="decimal">42.9602° N</option><option value="dms">42°57′37″ N</option></select>
+          </label>
+          <label class="field">Point
+            <select id="coordSource"><option value="center">Resort centre</option><option value="summit">Summit</option><option value="base">Base</option></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card" id="sec-export">
+        <h2>6 · Laser export</h2>
+        <div class="row">
+          <label class="field">Line weight (mm)<input type="number" id="lineWeight" min="0.05" max="1" step="0.05" /></label>
+          <label class="field">Colours
+            <select id="colorMode">
+              <option value="layers">One colour per layer</option>
+              <option value="mono">All black</option>
+            </select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="layerByDifficulty" /> Separate trail layers by difficulty</label>
+        <label class="check"><input type="checkbox" id="includeCut" /> Include blank outline (red cut / framing guide)</label>
+        <ul class="legend" id="legend"></ul>
+        <p class="hint">In xTool Studio, set <b>Score</b> for line layers and <b>Engrave</b> for the black text layer. Everything is exported as outlined paths at true size, so no fonts are needed.</p>
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-toolbar">
+        <label>Preview on
+          <select id="material"></select>
+        </label>
+        <span id="dims" class="dims"></span>
+      </div>
+      <div class="preview-wrap">
+        <div id="preview" class="preview" aria-label="Design preview"></div>
+        <div id="empty" class="empty">
+          <svg viewBox="0 0 120 70" aria-hidden="true"><path d="M5 62 42 14l16 22 10-12 47 38z" /><path d="M42 14l-9 12 6-2 4 5 5-5 6 2z" class="snow" /></svg>
+          <p><b>Search for a ski area</b> to draw its trails.</p>
+          <p class="hint">Trails &amp; lifts come from OpenStreetMap, terrain from AWS Terrain Tiles.</p>
+        </div>
+        <div id="busy" class="busy hidden"><span class="spinner"></span><span id="busy-text">Loading…</span></div>
+      </div>
+      <div class="facts" id="facts"></div>
+      <footer class="attribution">
+        Trail data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+        via <a href="https://openskimap.org" target="_blank" rel="noopener">OpenSkiMap</a> ·
+        Terrain: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">AWS Terrain Tiles</a> ·
+        Fonts: SIL Open Font License
+      </footer>
+    </section>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
