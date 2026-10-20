@@ -11,6 +11,9 @@ import {
   formatElevation, formatCoords, difficultyInfo, slugify, DIFFICULTY_ORDER, placeLabel, FT_PER_M, withCommas,
 } from './format.js';
 
+// Shown in the footer so a stale cached copy is easy to spot.
+export const APP_VERSION = '1.2.0';
+
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
 const STORAGE_KEY = 'fall-line-studio:v2';
 const LEGACY_KEYS = ['fall-line-studio:v1'];
@@ -728,6 +731,7 @@ $('units').addEventListener('change', () => renderFacts());
 
 // ---------------------------------------------------------------------------
 
+$('app-version').textContent = `v${APP_VERSION}`;
 buildStaticControls();
 wireControls();
 syncControls();

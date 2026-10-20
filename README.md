@@ -86,7 +86,9 @@ directly from disk won't work.
 ### Deploying (GitHub Pages)
 
 Settings → Pages → *Deploy from a branch* → pick the branch and `/ (root)`.
-All paths are relative, so it works from a sub-path.
+All paths are relative, so it works from a sub-path. GitHub Pages caches files
+for about 10 minutes. After an update, hard-refresh (Ctrl/Cmd+Shift+R) and check
+the version shown at the bottom of the page.
 
 ## Data sources and accuracy
 
@@ -131,7 +133,18 @@ fonts/                         Cinzel, Playfair Display, Bebas Neue, Josefin San
 ```bash
 npm test             # unit tests (node --test): geometry, contours, hidden lines, stats, text, SVG safety
 npm run test:e2e     # headless Chromium end-to-end run with all APIs mocked (needs Playwright)
+npm run test:layout  # geometric check of every template × size × worst-case text (needs Playwright)
 ```
+
+The layout check composes every template at every preset size, plus odd custom
+sizes, with plain, worst-case (long names, all stats, dedication) and script-font
+content. It then samples every engraved path with the browser's SVG geometry engine
+to verify four things:
+
+- everything is on the physical blank
+- content stays inside the border
+- nothing touches a frame line
+- no two pieces of text overlap
 
 The end-to-end test uses `tests/fixtures/synthetic-area.json`: synthetic runs
 generated on real terrain near Mount Snow, VT. They are for offline testing

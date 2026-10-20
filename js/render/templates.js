@@ -8,7 +8,7 @@
 // o (options): { titleScale, smallCaps, border, cornerRadius, dividers }
 // art(doc, box, region): draws the trail art.
 
-import { textPath, arcTextPath, fitSize, layoutText } from './text.js';
+import { textPath, arcTextPath, fitSize, layoutText, inkExtent } from './text.js';
 import { rectPath, circlePath, pathData, fmt } from './geometry.js';
 import * as icons from './icons.js';
 import { Doc } from './art.js';
@@ -176,24 +176,28 @@ function summit(doc, c, f, o, art) {
     y = iconY - iconS * 0.55 - u * 0.045;
   }
 
+  // Lines stack upward by their real ink, so script swashes and descenders
+  // never run into the line below.
+  const stackLine = (font, text, size, opts, gap) => {
+    const ink = inkExtent(font, text, { size, ...opts });
+    const base = y - ink.bottom;
+    T(doc, font, text, { x: W / 2, y: base, size, ...opts });
+    y = base - ink.top - gap;
+  };
+
   if (c.personal) {
     const size = fitSize(f.script, c.personal, innerW * 0.9, u * 0.075 * k);
-    const r = T(doc, f.script, c.personal, { x: W / 2, y: y - size * 0.15, size });
-    y -= size * 0.95;
-    void r;
+    stackLine(f.script, c.personal, size, {}, u * 0.03);
   }
 
   if (c.subtitle) {
-    const size = fitSize(f.body, c.subtitle, innerW, u * 0.032 * k, { tracking: 0.32, caps: true });
-    T(doc, f.body, c.subtitle, { x: W / 2, y, size, tracking: 0.32, caps: true });
-    y -= size + u * 0.035;
+    const opts = { tracking: 0.32, caps: true };
+    stackLine(f.body, c.subtitle, fitSize(f.body, c.subtitle, innerW, u * 0.032 * k, opts), opts, u * 0.035);
   }
 
   if (c.title) {
     const opts = { tracking: 0.04, smallCaps: o.smallCaps && !f.title.isScript };
-    const size = fitSize(f.title, c.title, innerW, u * 0.12 * o.titleScale * k, opts);
-    const r = T(doc, f.title, c.title, { x: W / 2, y, size, ...opts });
-    y -= r.capHeight + u * 0.055;
+    stackLine(f.title, c.title, fitSize(f.title, c.title, innerW, u * 0.12 * o.titleScale * k, opts), opts, u * 0.055);
   }
 
   const top = o.border ? m * 0.9 : m * 0.7;
@@ -229,7 +233,7 @@ function topo(doc, c, f, o, art) {
     blocks.push(rectPath(inner.x + inner.w, inner.y + j * sy, band, sy));
     blocks.push(rectPath(outer.x, inner.y + inner.h - (j + 1) * sy, band, sy));
   }
-  doc.fill('text', blocks.join(''));
+  doc.fill('text', blocks.join(''), { touchesFrame: true });
 
   // Cartouche.
   const pad = u * 0.03;
@@ -303,19 +307,22 @@ function badge(doc, c, f, o, art) {
   doc.stroke('frame', circlePath(cx, cy, r2));
   if (o.border) doc.stroke('frame', circlePath(cx, cy, r1 + D * 0.014));
 
-  // Title over the top.
+  // Title over the top, sized by its real ink so script swashes stay in the band.
   const titleOpts = { tracking: f.title.isScript ? 0.02 : 0.1, smallCaps: o.smallCaps && !f.title.isScript };
-  let tSize = bandW * 0.62 * o.titleScale;
-  for (let i = 0; i < 6; i++) {
-    const lay = layoutText(f.title, c.title || '', { size: tSize, ...titleOpts });
-    const rBase = rMid - lay.capHeight / 2;
+  let tSize = bandW * 0.62 * o.titleScale * (o.textScale || 1);
+  let ink = inkExtent(f.title, c.title || 'X', { size: tSize, ...titleOpts });
+  for (let i = 0; i < 8; i++) {
+    const tall = ink.top + ink.bottom;
+    const rBase = rMid - (ink.top - ink.bottom) / 2;
     const maxW = rBase * ((150 * Math.PI) / 180);
-    if (lay.width <= maxW) break;
-    tSize *= maxW / lay.width;
+    const kk = Math.min(1, (bandW * 0.78) / tall, maxW / ink.width);
+    if (kk > 0.995) break;
+    tSize *= kk;
+    ink = inkExtent(f.title, c.title || 'X', { size: tSize, ...titleOpts });
   }
-  const tCap = layoutText(f.title, c.title || 'X', { size: tSize, ...titleOpts }).capHeight;
   if (c.title) {
-    doc.fill('text', arcTextPath(f.title, c.title, { cx, cy, r: rMid - tCap / 2, side: 'top', size: tSize, ...titleOpts }).d);
+    const rBase = rMid - (ink.top - ink.bottom) / 2;
+    doc.fill('text', arcTextPath(f.title, c.title, { cx, cy, r: rBase, side: 'top', size: tSize, ...titleOpts }).d);
   }
 
   // Stats under the bottom, split around the max-difficulty symbol.
@@ -379,81 +386,102 @@ function badge(doc, c, f, o, art) {
 // --------------------------------------------------------------------------
 // Lift ticket.
 
-function ticketOutline(W, H, inset, px, nr, cr) {
-  const x0 = inset, y0 = inset, x1 = W - inset, y1 = H - inset;
-  const f = fmt;
-  return (
-    `M${f(x0 + cr)} ${f(y0)}L${f(px - nr)} ${f(y0)}A${f(nr)} ${f(nr)} 0 0 0 ${f(px + nr)} ${f(y0)}` +
-    `L${f(x1 - cr)} ${f(y0)}A${f(cr)} ${f(cr)} 0 0 1 ${f(x1)} ${f(y0 + cr)}` +
-    `L${f(x1)} ${f(y1 - cr)}A${f(cr)} ${f(cr)} 0 0 1 ${f(x1 - cr)} ${f(y1)}` +
-    `L${f(px + nr)} ${f(y1)}A${f(nr)} ${f(nr)} 0 0 0 ${f(px - nr)} ${f(y1)}` +
-    `L${f(x0 + cr)} ${f(y1)}A${f(cr)} ${f(cr)} 0 0 1 ${f(x0)} ${f(y1 - cr)}` +
-    `L${f(x0)} ${f(y0 + cr)}A${f(cr)} ${f(cr)} 0 0 1 ${f(x0 + cr)} ${f(y0)}Z`
-  );
-}
-
 /** Ticket proportions; everything scales from the short side `u`. */
 function ticketGeometry(W, H) {
   const u = Math.min(H, W / 1.55);
-  return {
+  const g = {
     u,
-    inset: u * 0.03,
     px: Math.min(W * 0.215, u * 0.36), // perforation x
-    nr: u * 0.065, // notch radius on the engraved outline
-    cr: u * 0.06, // corner radius
-    bo: u * 0.035, // inner border offset
+    notch: u * 0.075, // radius of the notch cut into the blank, centred on its edge
+    corner: u * 0.09, // corner radius of the blank
+    inset: u * 0.03, // engraved outline, inside the blank edge
+    bo: u * 0.035, // inner border, inside the outline
   };
+  // Nothing but frame lines may come within this distance of a notch centre.
+  g.keepOut = g.notch + g.inset + g.bo + u * 0.03;
+  return g;
+}
+
+/**
+ * The blank's outline offset inward by `d`. Notch arcs stay centred on the
+ * blank's edge (so they grow by d) and corners stay concentric (shrinking by
+ * d), so every engraved outline runs parallel to the cut edge.
+ */
+function ticketOutline(W, H, d, g) {
+  const r = g.notch + d;
+  const hx = Math.sqrt(Math.max(0, r * r - d * d));
+  const rc = Math.max(0.3, g.corner - d);
+  const x0 = d, y0 = d, x1 = W - d, y1 = H - d, px = g.px;
+  const f = fmt;
+  return (
+    `M${f(x0 + rc)} ${f(y0)}L${f(px - hx)} ${f(y0)}A${f(r)} ${f(r)} 0 0 0 ${f(px + hx)} ${f(y0)}` +
+    `L${f(x1 - rc)} ${f(y0)}A${f(rc)} ${f(rc)} 0 0 1 ${f(x1)} ${f(y0 + rc)}` +
+    `L${f(x1)} ${f(y1 - rc)}A${f(rc)} ${f(rc)} 0 0 1 ${f(x1 - rc)} ${f(y1)}` +
+    `L${f(px + hx)} ${f(y1)}A${f(r)} ${f(r)} 0 0 0 ${f(px - hx)} ${f(y1)}` +
+    `L${f(x0 + rc)} ${f(y1)}A${f(rc)} ${f(rc)} 0 0 1 ${f(x0)} ${f(y1 - rc)}` +
+    `L${f(x0)} ${f(y0 + rc)}A${f(rc)} ${f(rc)} 0 0 1 ${f(x0 + rc)} ${f(y0)}Z`
+  );
+}
+
+/** Smallest x-distance from the perforation at which a box spanning [y0, y1] clears the notches. */
+function notchClearX(g, H, y0, y1) {
+  const dy = Math.max(0, Math.min(y0, H - y1)); // distance from the nearer edge (notch centre)
+  return dy >= g.keepOut ? 0 : Math.sqrt(g.keepOut * g.keepOut - dy * dy);
 }
 
 function ticket(doc, c, f, o, art) {
   const { W, H } = doc;
-  const { u, inset, px, nr, cr, bo } = ticketGeometry(W, H);
+  const g = ticketGeometry(W, H);
+  const { u, inset, px, bo } = g;
   const k = o.textScale || 1;
-  doc.stroke('frame', ticketOutline(W, H, inset, px, nr, cr));
-  if (o.border) doc.stroke('frame', ticketOutline(W, H, inset + bo, px, nr + bo, Math.max(0.5, cr - bo)));
+  doc.cutShape = ticketOutline(W, H, 0, g);
+  doc.stroke('frame', ticketOutline(W, H, inset, g));
+  if (o.border) doc.stroke('frame', ticketOutline(W, H, inset + bo, g));
+  doc.safe = ticketOutline(W, H, inset + bo, g);
 
   // Perforation between the notches.
   const dots = [];
-  const dy0 = inset + nr + bo + u * 0.03;
-  const dy1 = H - inset - nr - bo - u * 0.03;
+  const dotR = u * 0.009;
+  const dy0 = g.keepOut + dotR;
+  const dy1 = H - g.keepOut - dotR;
   const n = Math.max(2, Math.round((dy1 - dy0) / (u * 0.04)));
-  for (let i = 0; i <= n; i++) dots.push(icons.dot(px, dy0 + ((dy1 - dy0) * i) / n, u * 0.009));
+  for (let i = 0; i <= n; i++) dots.push(icons.dot(px, dy0 + ((dy1 - dy0) * i) / n, dotR));
   doc.fill('text', dots.join(''));
 
   // Stub: difficulty symbol top and bottom, "Admit One" running up the middle.
-  const stubL = inset + bo;
-  const sc = (stubL + px) / 2;
-  const stubW = px - stubL;
-  const notchR = nr + bo + u * 0.02; // keep clear of the notch arcs
-  let iconS = Math.min(stubW * 0.5, u * 0.11);
+  const stubL = inset + bo + u * 0.04;
+  const stubR = px - u * 0.04;
+  const sc = (stubL + stubR) / 2;
+  const stubW = stubR - stubL;
+  let stubSpan = H - 2 * (inset + bo + u * 0.06);
   const symbol = c.maxDifficulty;
-  let stubSpan = H - 2 * (stubL + u * 0.06);
   if (symbol) {
+    let iconS = Math.min(stubW * 0.6, u * 0.11);
     const iw = icons.difficultyIconWidth(symbol.symbol, iconS);
-    if (iw > stubW * 0.62) iconS *= (stubW * 0.62) / iw;
-    // Lowest y where the icon's right edge clears the notch circle.
+    if (iw > stubW) iconS *= stubW / iw;
     const half = icons.difficultyIconWidth(symbol.symbol, iconS) / 2;
+    // Highest position at which the icon's top-right corner clears the notch.
     const dx = px - (sc + half);
-    const clearY = dx >= notchR ? 0 : Math.sqrt(notchR * notchR - dx * dx);
-    const iy = Math.max(stubL + u * 0.05 + iconS / 2, inset + clearY + iconS / 2);
+    const clearY = dx >= g.keepOut ? 0 : Math.sqrt(g.keepOut * g.keepOut - dx * dx);
+    const iy = Math.max(inset + bo + u * 0.05, clearY) + iconS / 2;
     doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, iy, iconS));
     doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, H - iy, iconS));
-    stubSpan = H - 2 * (iy + iconS * 0.9);
+    stubSpan = H - 2 * (iy + iconS / 2 + u * 0.05);
   }
-  if (c.stub) {
+  if (c.stub && stubSpan > u * 0.2) {
     const sf = f.title.isScript ? f.bold : f.title;
     const sOpts = { tracking: 0.12, caps: true };
-    const size = fitSize(sf, c.stub, stubSpan, stubW * 0.42 * k, sOpts);
+    const size = fitSize(sf, c.stub, stubSpan, stubW * 0.55 * k, sOpts);
     const cap = layoutText(sf, c.stub, { size, ...sOpts }).capHeight;
     T(doc, sf, c.stub, { x: sc + cap / 2, y: H / 2, size, ...sOpts, rotate: -90 });
   }
 
-  // Main panel, kept clear of the notches and the inner border.
-  const x0 = px + nr + bo + u * 0.05;
-  const x1 = W - inset - bo - u * 0.05;
-  const mw = x1 - x0;
+  // Main panel, inside the border and clear of the notches.
   const yTop = inset + bo + u * 0.05;
   const yBot = H - inset - bo - u * 0.05;
+  const x0 = px + Math.max(u * 0.08, notchClearX(g, H, yTop, H - yTop));
+  const x1 = W - inset - bo - u * 0.05;
+  const mw = x1 - x0;
   let y = yTop;
 
   if (c.header) {
@@ -557,7 +585,6 @@ function ticket(doc, c, f, o, art) {
     ? { x: x0, y: top + rowsH + u * 0.04, w: mw, h: Math.max(5, artH) }
     : { x: x0 + colW + (colW ? u * 0.05 : 0), y: top, w: x1 - (x0 + colW + (colW ? u * 0.05 : 0)), h: Math.max(5, avail) };
   art(doc, box);
-  doc.cutShape = ticketOutline(W, H, 0, px, nr + inset, cr + inset);
 }
 
 const LAYOUTS = { summit, topo, badge, ticket };
@@ -565,10 +592,7 @@ const LAYOUTS = { summit, topo, badge, ticket };
 /** Outline of the physical blank, used for the optional cut / alignment layer. */
 export function blankOutline(template, W, H, cornerRadius = 0) {
   if (template.shape === 'circle') return circlePath(W / 2, H / 2, Math.min(W, H) / 2);
-  if (template.shape === 'ticket') {
-    const g = ticketGeometry(W, H);
-    return ticketOutline(W, H, 0, g.px, g.nr + g.inset, g.cr + g.inset);
-  }
+  if (template.shape === 'ticket') return ticketOutline(W, H, 0, ticketGeometry(W, H));
   return rectPath(0, 0, W, H, cornerRadius);
 }
 

@@ -76,6 +76,23 @@ function capHeight(font) {
   return bb.y2 / font.unitsPerEm || 0.7;
 }
 
+/**
+ * Actual ink extent of laid-out text: how far glyphs reach above and below
+ * the baseline (script swashes often exceed the font's cap height).
+ */
+export function inkExtent(fontSet, text, opts) {
+  const lay = layoutText(fontSet, text, opts);
+  let top = 0;
+  let bottom = 0;
+  for (const p of lay.placed) {
+    const bb = p.glyph.getBoundingBox();
+    const scale = p.size / p.font.unitsPerEm;
+    top = Math.max(top, bb.y2 * scale);
+    bottom = Math.max(bottom, -bb.y1 * scale);
+  }
+  return { top, bottom, width: lay.width };
+}
+
 export function measure(fontSet, text, opts) {
   return layoutText(fontSet, text, opts).width;
 }

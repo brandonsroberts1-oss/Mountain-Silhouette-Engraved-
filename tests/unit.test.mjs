@@ -323,19 +323,21 @@ test('lift ticket keeps every element on the ticket and clear of the notches', a
       });
       const doc = composeDesign({ template: tpl, W: size.w, H: size.h, scene, content, fonts, options: { titleScale: many ? 1.4 : 1, smallCaps: true, border: true, cornerRadius: 3 }, artOptions: {} });
       const { w: W, h: H } = size;
+      // Same proportions as the template: notches are cut into the blank,
+      // centred on its top and bottom edges at the perforation.
       const u = Math.min(H, W / 1.55);
-      const edge = u * 0.065;
+      const border = u * 0.065; // outline inset + inner border offset
       const px = Math.min(W * 0.215, u * 0.36);
-      const notchR = u * 0.1;
+      const notchBorder = u * 0.075 + border; // the border's notch arc radius
       for (const it of doc.items) {
         if (it.layer === 'frame') continue;
         const [x0, y0, x1, y1] = pathBox(it.d);
         const where = `${W}x${H} ${many ? 'busy' : 'plain'} ${it.layer} [${x0.toFixed(1)},${y0.toFixed(1)},${x1.toFixed(1)},${y1.toFixed(1)}]`;
-        assert.ok(x0 >= edge - 0.05 && y0 >= edge - 0.05 && x1 <= W - edge + 0.05 && y1 <= H - edge + 0.05, `off the ticket: ${where}`);
-        for (const [cx, cy] of [[px, u * 0.03], [px, H - u * 0.03]]) {
+        assert.ok(x0 >= border && y0 >= border && x1 <= W - border && y1 <= H - border, `outside the border: ${where}`);
+        for (const [cx, cy] of [[px, 0], [px, H]]) {
           const nx = Math.max(x0, Math.min(cx, x1));
           const ny = Math.max(y0, Math.min(cy, y1));
-          assert.ok(Math.hypot(nx - cx, ny - cy) >= notchR, `in a notch: ${where}`);
+          assert.ok(Math.hypot(nx - cx, ny - cy) >= notchBorder + u * 0.01, `crosses a notch: ${where}`);
         }
       }
     }

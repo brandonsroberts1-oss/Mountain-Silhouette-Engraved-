@@ -16,8 +16,9 @@ export class Doc {
     this.cut = null;
   }
 
-  fill(layer, d) {
-    if (d) this.items.push({ layer, kind: 'fill', d });
+  /** meta.touchesFrame: deliberately drawn against frame lines (e.g. map border blocks). */
+  fill(layer, d, meta) {
+    if (d) this.items.push({ layer, kind: 'fill', d, ...(meta ? { meta } : {}) });
   }
 
   stroke(layer, d, weight = 1) {
@@ -146,7 +147,10 @@ export function placeArt(doc, scene, box, region, opts = {}) {
       for (const l of highlightLines) for (const p of l) if (!top || p[1] < top[1]) top = p;
       const size = Math.max(2.2, Math.min(box.w, box.h) * 0.06);
       const fn = o.highlightMarker === 'heart' ? icons.heart : icons.star;
-      doc.fill('text', fn(top[0], top[1] - size * 0.85, size));
+      // Keep the marker inside the art box (it would otherwise hit borders).
+      const mx = Math.max(box.x + size / 2, Math.min(box.x + box.w - size / 2, top[0]));
+      const my = Math.max(box.y + size / 2, top[1] - size * 0.85);
+      doc.fill('text', fn(mx, my, size));
     }
   }
 
