@@ -10,7 +10,7 @@
 //
 // Scene coordinates use y-up; layout flips them into SVG space.
 
-import { chaikin, densify, simplify, bounds } from './geometry.js';
+import { chaikin, densify, simplify, bounds, resample, gaussianSmooth } from './geometry.js';
 import { isolines, niceInterval } from './contours.js';
 
 const RAD = Math.PI / 180;
@@ -25,8 +25,43 @@ function frame(azimuthDeg) {
   return { f: [Math.sin(a), Math.cos(a)], r: [Math.cos(a), -Math.sin(a)] };
 }
 
+// Trail smoothing strength → Gaussian sigma in metres. OSM ways carry GPS
+// jitter and hand-traced wobble; smoothing at tens of metres keeps the shape of
+// the run but turns it into a clean, flowing line.
+const SMOOTH_SIGMA_M = [0, 12, 28, 55];
+const RESAMPLE_M = 8;
+
 function prepRunPts(run, smooth) {
-  return smooth > 0 ? chaikin(run.pts, smooth) : run.pts;
+  const sigma = SMOOTH_SIGMA_M[Math.max(0, Math.min(3, Math.round(smooth)))];
+  const pts = resample(run.pts, RESAMPLE_M);
+  return sigma > 0 ? gaussianSmooth(pts, sigma / RESAMPLE_M) : pts;
+}
+
+/**
+ * Clean up per-point visibility so grazing angles don't produce dashed
+ * flicker: fill hidden gaps of up to `gap` samples, then drop visible runs
+ * shorter than `minRun` samples.
+ */
+export function cleanVisibility(flags, gap = 3, minRun = 5) {
+  const v = flags.slice();
+  const n = v.length;
+  let i = 0;
+  while (i < n) {
+    if (v[i]) { i++; continue; }
+    let j = i;
+    while (j < n && !v[j]) j++;
+    if (i > 0 && j < n && j - i <= gap) for (let k = i; k < j; k++) v[k] = true;
+    i = j;
+  }
+  i = 0;
+  while (i < n) {
+    if (!v[i]) { i++; continue; }
+    let j = i;
+    while (j < n && v[j]) j++;
+    if (j - i < minRun) for (let k = i; k < j; k++) v[k] = false;
+    i = j;
+  }
+  return v;
 }
 
 /**
@@ -46,7 +81,7 @@ export const DEFAULT_VIEW = {
   terrain: 'ridges', // none | outline | ridges | contours
   ridgeCount: 48,
   isolate: true,
-  smooth: 1,
+  smooth: 2,
   contourInterval: 0, // metres, 0 = auto
   showLifts: true,
 };
@@ -84,8 +119,11 @@ function build3d(model, dem, view) {
   const fade = view.isolate
     ? (u, d) => smoothstep(0, 1, Math.min(u - u0, u1 - u, d - d0, d1 - d) / margin)
     : () => 1;
+  // Valleys below the base would bunch ridgelines together at the bottom, so
+  // an isolated mountain stands on a (nearly) flat floor.
+  const floor = view.isolate ? zBase - Math.max(1, model.topElevation - zBase) * 0.04 : -Infinity;
   const zAt = (x, y) => {
-    const z = dem.sample(x, y);
+    const z = Math.max(floor, dem.sample(x, y));
     return zBase + (z - zBase) * fade(toU(x, y), toD(x, y));
   };
   const project = (x, y, z) => [toU(x, y), toD(x, y) * sinT + k * (z - zBase) * cosT];
@@ -107,19 +145,17 @@ function build3d(model, dem, view) {
   };
 
   const splitVisible = (pts3) => {
+    const flags = cleanVisibility(pts3.map(([x, y, z]) => visible(x, y, z)));
     const lines = [];
     let cur = null;
-    for (const [x, y, z] of pts3) {
-      if (visible(x, y, z)) {
-        if (!cur) {
-          cur = [];
-          lines.push(cur);
-        }
+    pts3.forEach(([x, y, z], i) => {
+      if (flags[i]) {
+        if (!cur) lines.push((cur = []));
         cur.push(project(x, y, z));
       } else {
         cur = null;
       }
-    }
+    });
     return lines.filter((l) => l.length >= 2);
   };
 

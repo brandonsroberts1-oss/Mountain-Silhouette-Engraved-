@@ -10,15 +10,59 @@ export function buildModel(features) {
   const b = bboxOfCoords(all);
   const center = [(b.minLon + b.maxLon) / 2, (b.minLat + b.maxLat) / 2];
   const proj = makeProjection(center[0], center[1]);
-  const runs = features.runs
-    .map((r) => ({ name: r.name, difficulty: r.difficulty, pts: r.coords.map(proj.toLocal) }))
-    .filter((r) => polylineLength(r.pts) >= 25);
+  const runs = joinRuns(features.runs.map((r) => ({ name: r.name, difficulty: r.difficulty, pts: r.coords.map(proj.toLocal) })))
+    .filter((r) => polylineLength(r.pts) >= 40);
   const lifts = features.lifts
     .map((l) => ({ name: l.name, type: l.type, pts: l.coords.map(proj.toLocal) }))
     .filter((l) => polylineLength(l.pts) >= 40);
   let maxDist = 0;
   for (const f of [...runs, ...lifts]) for (const [x, y] of f.pts) maxDist = Math.max(maxDist, Math.hypot(x, y));
   return { proj, center, runs, lifts, radius: Math.max(700, maxDist * 1.32) };
+}
+
+/**
+ * OpenStreetMap splits a run into many ways (at every junction or tag change).
+ * Chain segments of the same run end-to-end so each trail draws as one
+ * continuous stroke. Named segments join by name; unnamed ones by difficulty.
+ */
+export function joinRuns(runs, tolerance = 20) {
+  const groups = new Map();
+  for (const r of runs) {
+    if (r.pts.length < 2) continue;
+    const key = r.name ? `n:${r.name.trim().toLowerCase()}` : `u:${r.difficulty || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ name: r.name ? r.name.trim() : null, difficulty: r.difficulty, pts: r.pts.slice() });
+  }
+  const close = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance;
+  const out = [];
+  for (const chains of groups.values()) {
+    // Grow each chain until nothing else attaches to either end: O(n²) per group.
+    for (let i = 0; i < chains.length; i++) {
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (let j = 0; j < chains.length; j++) {
+          if (j === i) continue;
+          const a = chains[i].pts;
+          const b = chains[j].pts;
+          let joined = null;
+          if (close(a[a.length - 1], b[0])) joined = [...a, ...b.slice(1)];
+          else if (close(a[a.length - 1], b[b.length - 1])) joined = [...a, ...b.slice(0, -1).reverse()];
+          else if (close(a[0], b[b.length - 1])) joined = [...b, ...a.slice(1)];
+          else if (close(a[0], b[0])) joined = [...b.slice(1).reverse(), ...a];
+          if (!joined) continue;
+          const d = difficultyRank(chains[j].difficulty) > difficultyRank(chains[i].difficulty) ? chains[j].difficulty : chains[i].difficulty;
+          chains[i] = { ...chains[i], difficulty: d, pts: joined };
+          chains.splice(j, 1);
+          if (j < i) i--;
+          grew = true;
+          break;
+        }
+      }
+    }
+    out.push(...chains);
+  }
+  return out;
 }
 
 /** Fill in base/top elevation from the DEM along the runs. */

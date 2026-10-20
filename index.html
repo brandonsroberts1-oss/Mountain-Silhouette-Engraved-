@@ -81,7 +81,20 @@
             </select>
           </label>
         </div>
+        <div class="row">
+          <label class="field">Trail style
+            <select id="trailStyle">
+              <option value="bold">Bold engraved strokes</option>
+              <option value="line">Fine score lines</option>
+            </select>
+          </label>
+          <label class="field range only-bold">Trail width <output id="trailWidth-out"></output><input type="range" id="trailWidth" min="0.15" max="1" step="0.05" /></label>
+        </div>
         <label class="field range">Trail smoothing <output id="smooth-out"></output><input type="range" id="smooth" min="0" max="3" step="1" /></label>
+        <div class="checks">
+          <label class="check only-bold"><input type="checkbox" id="taper" /> Taper trail tops</label>
+          <label class="check"><input type="checkbox" id="knockout" /> Gap terrain lines around trails</label>
+        </div>
         <label class="field">Lifts
           <select id="liftStyle">
             <option value="dashed">Dashed lines</option>

@@ -15,7 +15,7 @@ export const FONTS = {
   oswald: { name: 'Oswald', files: files('oswald', 500) },
   montserrat: { name: 'Montserrat', files: files('montserrat', 500) },
   'montserrat-bold': { name: 'Montserrat Bold', files: files('montserrat', 700) },
-  'great-vibes': { name: 'Great Vibes', files: files('great-vibes', 400) },
+  'great-vibes': { name: 'Great Vibes', files: files('great-vibes', 400), script: true },
 };
 
 export const TITLE_FONT_IDS = ['cinzel', 'playfair', 'bebas', 'josefin', 'alfa', 'oswald', 'montserrat-bold', 'great-vibes'];
@@ -40,7 +40,8 @@ export function loadFont(id, loader) {
     ).then((fonts) => {
       const ok = fonts.filter(Boolean);
       if (!ok.length) throw new Error(`Font ${def.name} failed to load`);
-      return makeFontSet(ok);
+      // Script faces must never be forced into capitals.
+      return { ...makeFontSet(ok), isScript: !!def.script };
     });
     cache.set(id, p);
   }

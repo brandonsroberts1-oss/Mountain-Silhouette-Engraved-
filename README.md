@@ -7,10 +7,10 @@ export a file sized in millimetres that imports straight into **xTool Studio**.
 The trails are not traced by hand. They come from OpenStreetMap, are placed on a
 real elevation model, and are drawn in one of two views:
 
-- **Mountain view:** an oblique view from the base looking uphill, like a painted
-  resort trail map. Trails hidden behind ridges are removed. The terrain can be drawn as a
-  clean **mountain outline** or as **ridgelines** (Joy-Division-style horizon
-  slices).
+- **Mountain view** (the default on coasters, badges and tickets): an oblique
+  view from the base looking uphill, like a painted resort trail map. Trails
+  hidden behind ridges are removed. The terrain is drawn as **3D ridgelines**
+  (Joy-Division-style horizon slices) or as a clean **mountain outline**.
 - **Top-down map:** a plan view rotated so the summit sits at the top, over
   **contour lines** generated from the terrain.
 
@@ -18,6 +18,7 @@ real elevation model, and are drawn in one of two views:
 
 | | |
 |---|---|
+| **Finished-looking trails** | OSM run segments are joined into continuous trails and smoothed to remove GPS jitter. Flicker where trails pass behind ridges is cleaned up. Trails are drawn as **bold tapered strokes** (filled shapes, engraved solid) or as **fine score lines**, and terrain lines stop short of each trail so it stands out. |
 | **Search** | Ski areas worldwide via OpenSkiMap. Falls back to OpenStreetMap Nominatim + Overpass if needed. |
 | **Stats** | Summit and base elevation, vertical drop, trail count with a difficulty breakdown, toughest run, lift count, location, and coordinates (centre, summit or base; decimal or DMS). Every value can be overridden. |
 | **Templates** | **Summit** (art over title + icon stats row), **Topo** (contour map, checkered map border, title cartouche, north arrow), **Badge** (round seal with text on arcs), **Lift Ticket** (tear-off stub, dotted stat leaders, serial number made from the coordinates). |
@@ -54,7 +55,7 @@ Plan-view maps and contour coasters are common. This app leans into what is not:
    | Colour | Content | Suggested processing |
    |---|---|---|
    | Black fill | Text, icons, dots, blocks | Engrave (fill) |
-   | Blue `#0000FF` | Trails | Score |
+   | Blue `#0000FF` | Trails | Engrave (fill) with *Bold engraved strokes*; Score with *Fine score lines* |
    | Magenta `#FF00FF` | Terrain lines | Score at lower power, so it reads lighter |
    | Cyan `#00A0C8` | Lifts | Score |
    | Orange `#FF7F00` | Favourite run | Score, or higher power for emphasis |
@@ -65,9 +66,10 @@ Plan-view maps and contour coasters are common. This app leans into what is not:
 3. Run a material test grid first. Slate, wood and leather vary a lot between
    machines and batches. Score lines on slate turn light grey and engraved fills
    turn pale.
-4. *Line weight* sets the preview and SVG stroke width. Score operations follow
-   the path centreline, so line weight mostly matters if you engrave strokes
-   instead of scoring them.
+4. *Trail width* (bold style) is a real physical width: the trails are filled
+   shapes, so they engrave as solid lines of that width. 0.35–0.5 mm reads well
+   on a 4″ coaster. *Line weight* only sets the preview/SVG stroke width of
+   score lines; a score follows the path centreline.
 
 ## Running locally
 

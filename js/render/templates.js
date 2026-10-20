@@ -11,6 +11,7 @@
 import { textPath, arcTextPath, fitSize, layoutText } from './text.js';
 import { rectPath, circlePath, pathData, fmt } from './geometry.js';
 import * as icons from './icons.js';
+import { Doc } from './art.js';
 
 export const TEMPLATES = [
   {
@@ -25,7 +26,7 @@ export const TEMPLATES = [
       { id: 'p57', label: 'Plaque 5×7″ portrait', w: 127, h: 177.8 },
       { id: 'p810', label: 'Plaque 8×10″ portrait', w: 203.2, h: 254 },
     ],
-    defaults: { mode: '3d', terrain: 'outline' },
+    defaults: { mode: '3d', terrain: 'ridges' },
   },
   {
     id: 'topo',
@@ -141,12 +142,13 @@ function summit(doc, c, f, o, art) {
   const { W, H } = doc;
   const u = Math.min(W, H);
   const m = u * 0.075;
+  const k = o.textScale || 1;
   const innerW = W - 2 * m;
   if (o.border) doc.stroke('frame', rectPath(m * 0.42, m * 0.42, W - m * 0.84, H - m * 0.84, o.cornerRadius));
 
   let y = H - m;
   if (c.coords) {
-    const size = u * 0.028;
+    const size = u * 0.028 * k;
     T(doc, f.body, c.coords, { x: W / 2, y, size, tracking: 0.2, caps: true, align: 'center' });
     y -= size + u * 0.04;
   }
@@ -154,9 +156,9 @@ function summit(doc, c, f, o, art) {
   if (c.stats.length) {
     const n = c.stats.length;
     const colW = innerW / n;
-    const iconS = u * 0.062;
-    const valS = u * (n > 3 ? 0.04 : 0.046);
-    const labS = u * 0.022;
+    const iconS = u * 0.062 * k;
+    const valS = u * (n > 3 ? 0.04 : 0.046) * k;
+    const labS = u * 0.022 * k;
     const labY = y;
     const valY = labY - labS * 1.7;
     const iconY = valY - valS * 1.0 - iconS * 0.62;
@@ -175,26 +177,27 @@ function summit(doc, c, f, o, art) {
   }
 
   if (c.personal) {
-    const size = fitSize(f.script, c.personal, innerW * 0.9, u * 0.075);
+    const size = fitSize(f.script, c.personal, innerW * 0.9, u * 0.075 * k);
     const r = T(doc, f.script, c.personal, { x: W / 2, y: y - size * 0.15, size });
     y -= size * 0.95;
     void r;
   }
 
   if (c.subtitle) {
-    const size = fitSize(f.body, c.subtitle, innerW, u * 0.032, { tracking: 0.32, caps: true });
+    const size = fitSize(f.body, c.subtitle, innerW, u * 0.032 * k, { tracking: 0.32, caps: true });
     T(doc, f.body, c.subtitle, { x: W / 2, y, size, tracking: 0.32, caps: true });
     y -= size + u * 0.035;
   }
 
   if (c.title) {
-    const opts = { tracking: 0.04, smallCaps: o.smallCaps };
-    const size = fitSize(f.title, c.title, innerW, u * 0.12 * o.titleScale, opts);
+    const opts = { tracking: 0.04, smallCaps: o.smallCaps && !f.title.isScript };
+    const size = fitSize(f.title, c.title, innerW, u * 0.12 * o.titleScale * k, opts);
     const r = T(doc, f.title, c.title, { x: W / 2, y, size, ...opts });
     y -= r.capHeight + u * 0.055;
   }
 
   const top = o.border ? m * 0.9 : m * 0.7;
+  doc.fits = y - top >= H * 0.3;
   art(doc, { x: m, y: top, w: innerW, h: Math.max(5, y - top) });
 }
 
@@ -231,7 +234,7 @@ function topo(doc, c, f, o, art) {
   // Cartouche.
   const pad = u * 0.03;
   const cw = Math.min(inner.w * 0.82, inner.w - 2 * pad);
-  const titleOpts = { tracking: 0.05, smallCaps: o.smallCaps };
+  const titleOpts = { tracking: 0.05, smallCaps: o.smallCaps && !f.title.isScript };
   const tSize = fitSize(f.title, c.title, cw - 2 * pad, u * 0.085 * o.titleScale, titleOpts);
   const tCap = layoutText(f.title, c.title || 'X', { size: tSize, ...titleOpts }).capHeight;
   const sSize = u * 0.03;
@@ -301,7 +304,7 @@ function badge(doc, c, f, o, art) {
   if (o.border) doc.stroke('frame', circlePath(cx, cy, r1 + D * 0.014));
 
   // Title over the top.
-  const titleOpts = { tracking: 0.1, smallCaps: o.smallCaps };
+  const titleOpts = { tracking: f.title.isScript ? 0.02 : 0.1, smallCaps: o.smallCaps && !f.title.isScript };
   let tSize = bandW * 0.62 * o.titleScale;
   for (let i = 0; i < 6; i++) {
     const lay = layoutText(f.title, c.title || '', { size: tSize, ...titleOpts });
@@ -389,115 +392,171 @@ function ticketOutline(W, H, inset, px, nr, cr) {
   );
 }
 
+/** Ticket proportions; everything scales from the short side `u`. */
+function ticketGeometry(W, H) {
+  const u = Math.min(H, W / 1.55);
+  return {
+    u,
+    inset: u * 0.03,
+    px: Math.min(W * 0.215, u * 0.36), // perforation x
+    nr: u * 0.065, // notch radius on the engraved outline
+    cr: u * 0.06, // corner radius
+    bo: u * 0.035, // inner border offset
+  };
+}
+
 function ticket(doc, c, f, o, art) {
   const { W, H } = doc;
-  const u = H;
-  const m = u * 0.075;
-  const inset = u * 0.03;
-  const px = W * 0.215;
-  const nr = u * 0.065;
-  const cr = u * 0.06;
+  const { u, inset, px, nr, cr, bo } = ticketGeometry(W, H);
+  const k = o.textScale || 1;
   doc.stroke('frame', ticketOutline(W, H, inset, px, nr, cr));
-  if (o.border) doc.stroke('frame', ticketOutline(W, H, inset + u * 0.035, px, nr + u * 0.035, Math.max(0.5, cr - u * 0.035)));
+  if (o.border) doc.stroke('frame', ticketOutline(W, H, inset + bo, px, nr + bo, Math.max(0.5, cr - bo)));
 
-  // Perforation.
+  // Perforation between the notches.
   const dots = [];
-  const dy0 = inset + nr + u * 0.04;
-  const dy1 = H - inset - nr - u * 0.04;
+  const dy0 = inset + nr + bo + u * 0.03;
+  const dy1 = H - inset - nr - bo - u * 0.03;
   const n = Math.max(2, Math.round((dy1 - dy0) / (u * 0.04)));
   for (let i = 0; i <= n; i++) dots.push(icons.dot(px, dy0 + ((dy1 - dy0) * i) / n, u * 0.009));
   doc.fill('text', dots.join(''));
 
-  // Stub.
-  const sc = px / 2 + inset / 2;
-  const iconS = Math.min(px * 0.36, u * 0.13);
+  // Stub: difficulty symbol top and bottom, "Admit One" running up the middle.
+  const stubL = inset + bo;
+  const sc = (stubL + px) / 2;
+  const stubW = px - stubL;
+  const notchR = nr + bo + u * 0.02; // keep clear of the notch arcs
+  let iconS = Math.min(stubW * 0.5, u * 0.11);
   const symbol = c.maxDifficulty;
+  let stubSpan = H - 2 * (stubL + u * 0.06);
   if (symbol) {
-    const w = icons.difficultyIconWidth(symbol.symbol, iconS);
-    const s = w > px * 0.62 ? (iconS * px * 0.62) / w : iconS;
-    doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, m + inset + s * 0.45, s));
-    doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, H - m - inset - s * 0.45, s));
+    const iw = icons.difficultyIconWidth(symbol.symbol, iconS);
+    if (iw > stubW * 0.62) iconS *= (stubW * 0.62) / iw;
+    // Lowest y where the icon's right edge clears the notch circle.
+    const half = icons.difficultyIconWidth(symbol.symbol, iconS) / 2;
+    const dx = px - (sc + half);
+    const clearY = dx >= notchR ? 0 : Math.sqrt(notchR * notchR - dx * dx);
+    const iy = Math.max(stubL + u * 0.05 + iconS / 2, inset + clearY + iconS / 2);
+    doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, iy, iconS));
+    doc.fill('text', icons.difficultyIcon(symbol.symbol, sc, H - iy, iconS));
+    stubSpan = H - 2 * (iy + iconS * 0.9);
   }
   if (c.stub) {
-    const span = H - 2 * (m + inset + iconS * 1.25);
-    const size = fitSize(f.title, c.stub, span, px * 0.34, { tracking: 0.12, caps: true });
-    const cap = layoutText(f.title, c.stub, { size }).capHeight;
-    T(doc, f.title, c.stub, { x: sc + cap / 2, y: H / 2, size, tracking: 0.12, caps: true, rotate: -90 });
+    const sf = f.title.isScript ? f.bold : f.title;
+    const sOpts = { tracking: 0.12, caps: true };
+    const size = fitSize(sf, c.stub, stubSpan, stubW * 0.42 * k, sOpts);
+    const cap = layoutText(sf, c.stub, { size, ...sOpts }).capHeight;
+    T(doc, sf, c.stub, { x: sc + cap / 2, y: H / 2, size, ...sOpts, rotate: -90 });
   }
 
-  // Main panel.
-  const x0 = px + m;
-  const x1 = W - inset - m * 0.9;
+  // Main panel, kept clear of the notches and the inner border.
+  const x0 = px + nr + bo + u * 0.05;
+  const x1 = W - inset - bo - u * 0.05;
   const mw = x1 - x0;
-  let y = inset + m;
+  const yTop = inset + bo + u * 0.05;
+  const yBot = H - inset - bo - u * 0.05;
+  let y = yTop;
+
   if (c.header) {
-    const hs = u * 0.042;
     const hOpts = { tracking: 0.32, caps: true };
-    const r = T(doc, f.body, c.header, { x: x0 + mw / 2, y: y + hs * 0.72, size: fitSize(f.body, c.header, mw * 0.72, hs, hOpts), ...hOpts });
-    const ly = y + hs * 0.36;
+    const hs = fitSize(f.body, c.header, mw * 0.72, u * 0.04 * k, hOpts);
+    const cap = layoutText(f.body, c.header, { size: hs, ...hOpts }).capHeight;
+    const r = T(doc, f.body, c.header, { x: x0 + mw / 2, y: y + cap, size: hs, ...hOpts });
+    const ly = y + cap / 2;
     const gap = u * 0.03;
     doc.stroke('frame', pathData([
       [[x0, ly], [x0 + mw / 2 - r.width / 2 - gap, ly]],
       [[x0 + mw / 2 + r.width / 2 + gap, ly], [x1, ly]],
     ]));
-    y += hs + u * 0.045;
+    y += cap + u * 0.05;
   }
-  const titleOpts = { tracking: 0.03, smallCaps: o.smallCaps };
-  const tSize = fitSize(f.title, c.title, mw, u * 0.17 * o.titleScale, titleOpts);
-  const tr = T(doc, f.title, c.title, { x: x0, y: y + layoutText(f.title, c.title || 'X', { size: tSize, ...titleOpts }).capHeight, size: tSize, align: 'left', ...titleOpts });
-  y += (tr ? tr.capHeight : 0) + u * 0.04;
+
+  if (c.title) {
+    const titleOpts = { tracking: 0.03, smallCaps: o.smallCaps && !f.title.isScript };
+    const tSize = fitSize(f.title, c.title, mw, u * 0.16 * o.titleScale * k, titleOpts);
+    const cap = layoutText(f.title, c.title, { size: tSize, ...titleOpts }).capHeight;
+    T(doc, f.title, c.title, { x: x0, y: y + cap, size: tSize, align: 'left', ...titleOpts });
+    // Script faces swash well below the baseline.
+    y += cap + (f.title.isScript ? tSize * 0.22 : 0) + u * 0.04;
+  }
   if (c.subtitle) {
-    const ss = u * 0.036;
-    T(doc, f.body, c.subtitle, { x: x0, y: y + ss * 0.72, size: fitSize(f.body, c.subtitle, mw, ss, { tracking: 0.28, caps: true }), tracking: 0.28, caps: true, align: 'left' });
-    y += ss + u * 0.03;
+    const sOpts = { tracking: 0.28, caps: true };
+    const ss = fitSize(f.body, c.subtitle, mw, u * 0.034 * k, sOpts);
+    const cap = layoutText(f.body, c.subtitle, { size: ss, ...sOpts }).capHeight;
+    T(doc, f.body, c.subtitle, { x: x0, y: y + cap, size: ss, align: 'left', ...sOpts });
+    y += cap + u * 0.035;
   }
   if (c.personal) {
-    const ps = fitSize(f.script, c.personal, mw * 0.55, u * 0.08);
-    T(doc, f.script, c.personal, { x: x0, y: y + ps * 0.7, size: ps, align: 'left' });
-    y += ps * 0.9;
+    const ps = fitSize(f.script, c.personal, mw * 0.7, u * 0.075 * k);
+    T(doc, f.script, c.personal, { x: x0, y: y + ps * 0.62, size: ps, align: 'left' });
+    y += ps * 0.85;
   }
 
-  // Footer.
-  const fs = u * 0.03;
-  const footY = H - inset - m;
-  if (c.coords) T(doc, f.body, c.coords, { x: x0, y: footY, size: fitSize(f.body, c.coords, mw * 0.6, fs, { tracking: 0.12 }), tracking: 0.12, align: 'left' });
-  if (c.serial) T(doc, f.bold, c.serial, { x: x1, y: footY, size: fs, tracking: 0.12, align: 'right' });
-  const ruleY = footY - fs - u * 0.035;
-  doc.stroke('frame', pathData([[[x0, ruleY], [x1, ruleY]]]));
+  // Footer: coordinates left, serial right, rule above.
+  const fs = u * 0.03 * k;
+  const serialW = c.serial ? layoutText(f.bold, c.serial, { size: fs, tracking: 0.12 }).width : 0;
+  if (c.serial) T(doc, f.bold, c.serial, { x: x1, y: yBot, size: fs, tracking: 0.12, align: 'right' });
+  if (c.coords) {
+    const room = mw - serialW - (c.serial ? u * 0.06 : 0);
+    T(doc, f.body, c.coords, { x: x0, y: yBot, size: fitSize(f.body, c.coords, room, fs, { tracking: 0.12 }), tracking: 0.12, align: 'left' });
+  }
+  const ruleY = yBot - fs - u * 0.035;
+  if (c.coords || c.serial) doc.stroke('frame', pathData([[[x0, ruleY], [x1, ruleY]]]));
 
-  // Stats with dotted leaders (left) and art (right).
-  const top = y + u * 0.02;
-  const bottom = ruleY - u * 0.035;
-  const colW = c.stats.length ? mw * 0.47 : 0;
-  if (c.stats.length) {
-    const rowH = Math.min(u * 0.085, (bottom - top) / c.stats.length);
-    const rs = rowH * 0.48;
-    c.stats.forEach((st, i) => {
+  // Stats with dotted leaders, and the art: side by side on a normal ticket,
+  // stacked when the panel is tall for its width.
+  let top = y + u * 0.015;
+  const bottom = (c.coords || c.serial ? ruleY : yBot) - u * 0.035;
+  const avail = bottom - top;
+  const nStats = c.stats.length;
+  const stacked = nStats && avail > mw * 0.75;
+  const colW = !nStats ? 0 : stacked ? mw : mw * 0.48;
+  const rowsH = !nStats ? 0 : stacked ? Math.min(avail * 0.45, nStats * u * 0.085 * k) : avail;
+  const rowH = nStats ? Math.min(u * 0.085 * k, rowsH / nStats) : 0;
+  // Stacked (tall custom sizes): stats then art as one block, centred.
+  const artH = stacked ? Math.min(avail - rowsH - u * 0.04, mw * 0.65) : 0;
+  if (stacked) top += (avail - (rowsH + u * 0.04 + artH)) / 2;
+  doc.fits = avail > u * 0.18 && (!nStats || rowH >= u * 0.05);
+
+  if (nStats) {
+    const rows = c.stats.map((st) => ({
+      st,
+      label: st.id === 'difficulty' ? 'Toughest' : st.label,
+      value: st.unit ? `${st.value} ${st.unit}` : st.value,
+      iconW: st.id === 'difficulty' && st.icon ? (st.iconWidth || 1) * 1.25 : 0,
+    }));
+    // One font size for every row: the largest at which each fits its column.
+    let rs = rowH * 0.48;
+    for (const r of rows) {
+      const lw = layoutText(f.body, r.label, { size: rs, tracking: 0.12, caps: true }).width;
+      const vw = r.st.id === 'difficulty' ? 0 : layoutText(f.bold, r.value, { size: rs, tracking: 0.04 }).width;
+      const need = lw + vw + r.iconW * rs + rs * 1.6;
+      if (need > colW) rs *= colW / need;
+    }
+    rows.forEach((r, i) => {
       const by = top + rowH * (i + 0.5) + rs * 0.36;
-      const label = st.id === 'difficulty' ? 'Toughest' : st.label;
-      const lab = T(doc, f.body, label, { x: x0, y: by, size: rs, tracking: 0.12, caps: true, align: 'left' });
-      const valueText = st.unit ? `${st.value} ${st.unit}` : st.value;
+      const lab = T(doc, f.body, r.label, { x: x0, y: by, size: rs, tracking: 0.12, caps: true, align: 'left' });
       let vEnd = x0 + colW;
-      if (st.id === 'difficulty' && st.icon) {
-        const iw = (st.iconWidth || 1) * rs * 1.25;
-        doc.fill('text', st.icon(vEnd - iw / 2, by - rs * 0.36, rs * 1.25));
+      if (r.iconW) {
+        const iw = r.iconW * rs;
+        doc.fill('text', r.st.icon(vEnd - iw / 2, by - rs * 0.36, rs * 1.25));
         vEnd -= iw + rs * 0.4;
       }
-      const avail = vEnd - (x0 + (lab ? lab.width : 0) + rs * 1.2);
-      const vw = layoutText(f.bold, valueText, { size: rs, tracking: 0.04 }).width;
-      // Shrink a little to fit; if that's not enough, the difficulty row shows just its symbol.
-      const vs = vw > avail ? rs * (avail / vw) : rs;
-      const val = vs >= rs * 0.8 ? T(doc, f.bold, valueText, { x: vEnd, y: by, size: vs, tracking: 0.04, align: 'right' }) : null;
-      const d0 = x0 + (lab ? lab.width : 0) + rs * 0.5;
+      // The difficulty name is shown only if it fits beside its symbol.
+      const vw = layoutText(f.bold, r.value, { size: rs, tracking: 0.04 }).width;
+      const room = vEnd - (x0 + lab.width + rs * 1.2);
+      const val = r.value && vw <= room ? T(doc, f.bold, r.value, { x: vEnd, y: by, size: rs, tracking: 0.04, align: 'right' }) : null;
+      const d0 = x0 + lab.width + rs * 0.5;
       const d1 = vEnd - (val ? val.width : 0) - rs * 0.5;
-      const step = rs * 0.42;
       const leader = [];
-      for (let x = d0; x <= d1; x += step) leader.push(icons.dot(x, by - rs * 0.08, rs * 0.07));
+      for (let x = d0; x <= d1; x += rs * 0.42) leader.push(icons.dot(x, by - rs * 0.08, rs * 0.07));
       doc.fill('text', leader.join(''));
     });
   }
-  const artX = x0 + colW + (colW ? u * 0.05 : 0);
-  art(doc, { x: artX, y: top, w: x1 - artX, h: Math.max(5, bottom - top) });
+
+  const box = stacked
+    ? { x: x0, y: top + rowsH + u * 0.04, w: mw, h: Math.max(5, artH) }
+    : { x: x0 + colW + (colW ? u * 0.05 : 0), y: top, w: x1 - (x0 + colW + (colW ? u * 0.05 : 0)), h: Math.max(5, avail) };
+  art(doc, box);
   doc.cutShape = ticketOutline(W, H, 0, px, nr + inset, cr + inset);
 }
 
@@ -507,12 +566,25 @@ const LAYOUTS = { summit, topo, badge, ticket };
 export function blankOutline(template, W, H, cornerRadius = 0) {
   if (template.shape === 'circle') return circlePath(W / 2, H / 2, Math.min(W, H) / 2);
   if (template.shape === 'ticket') {
-    const u = H;
-    return ticketOutline(W, H, 0, W * 0.215, u * 0.065 + u * 0.03, u * 0.06 + u * 0.03);
+    const g = ticketGeometry(W, H);
+    return ticketOutline(W, H, 0, g.px, g.nr + g.inset, g.cr + g.inset);
   }
   return rectPath(0, 0, W, H, cornerRadius);
 }
 
+/**
+ * Lay out a template. Layouts flag `doc.fits = false` when their text leaves
+ * too little room (long names, big custom fonts, odd custom sizes); text is
+ * then scaled down step by step. Trial passes skip the (costly) art.
+ */
 export function renderTemplate(template, doc, c, f, o, art) {
-  LAYOUTS[template.id](doc, c, f, o, art);
+  const layout = LAYOUTS[template.id];
+  let textScale = 1;
+  for (const k of [1, 0.9, 0.8, 0.7, 0.6]) {
+    const probe = new Doc(doc.W, doc.H);
+    layout(probe, c, f, { ...o, textScale: k }, () => null);
+    textScale = k;
+    if (probe.fits !== false) break;
+  }
+  layout(doc, c, f, { ...o, textScale }, art);
 }

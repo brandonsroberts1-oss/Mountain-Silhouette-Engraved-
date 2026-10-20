@@ -244,7 +244,7 @@ input[type='range'] { accent-color: var(--accent); }
 .fact .sym { letter-spacing: 0.04em; }
 .attribution { padding: 0 20px 14px; font-size: 11px; color: var(--muted); }
 
-.only-3d, .only-map, .only-ridges, .only-ticket { display: contents; }
+.only-3d, .only-map, .only-ridges, .only-ticket, .only-bold { display: contents; }
 
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }

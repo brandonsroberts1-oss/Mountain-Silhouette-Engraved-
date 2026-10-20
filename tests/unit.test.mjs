@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { simplify, chaikin, clipPolyline, dashPolyline, polylineLength, pathData, signedArea } from '../js/render/geometry.js';
+import { simplify, chaikin, clipPolyline, dashPolyline, polylineLength, pathData, signedArea, resample, gaussianSmooth, strokeOutline, lineMask, knockout } from '../js/render/geometry.js';
 import { isolines, niceInterval } from '../js/render/contours.js';
 import { DemGrid } from '../js/render/dem-grid.js';
-import { buildScene, DEFAULT_VIEW, uphillBearing } from '../js/render/scene.js';
-import { buildModel, attachElevation, computeStats, groupTrails } from '../js/data/model.js';
+import { buildScene, DEFAULT_VIEW, uphillBearing, cleanVisibility } from '../js/render/scene.js';
+import { buildModel, attachElevation, computeStats, groupTrails, joinRuns } from '../js/data/model.js';
 import { formatCoords, elevationParts, difficultyInfo, difficultyClass, slugify, placeLabel } from '../js/format.js';
 import { buildContent, currentSeason } from '../js/content.js';
 import { loadFont } from '../js/fonts.js';
@@ -232,4 +232,127 @@ test('every template composes into a laser-safe SVG', async () => {
     const nums = [...svg.matchAll(/d="([^"]+)"/g)].flatMap((m) => (m[1].match(/-?\d+(\.\d+)?/g) || []).map(Number));
     assert.ok(Math.min(...nums) > -1 && Math.max(...nums) < Math.max(size.w, size.h) + 1, tpl.id);
   }
+});
+
+test('joinRuns chains split OSM ways into continuous trails', () => {
+  const runs = joinRuns([
+    { name: 'A', difficulty: 'easy', pts: [[0, 0], [0, 100]] },
+    { name: 'A', difficulty: 'expert', pts: [[0, 300], [0, 200]] },
+    { name: 'A ', difficulty: 'easy', pts: [[0, 100], [0, 200]] },
+    { name: 'B', difficulty: 'easy', pts: [[0, 100], [90, 100]] },
+  ]);
+  const a = runs.find((r) => r.name === 'A');
+  assert.equal(runs.length, 2);
+  assert.equal(a.difficulty, 'expert');
+  assert.equal(polylineLength(a.pts), 300);
+});
+
+test('resample + gaussianSmooth remove jitter but keep endpoints', () => {
+  const noisy = Array.from({ length: 101 }, (_, i) => [i * 5, i % 2 ? 3 : -3]);
+  const smooth = gaussianSmooth(resample(noisy, 5), 4);
+  assert.deepEqual(smooth[0], noisy[0]);
+  assert.deepEqual(smooth[smooth.length - 1], noisy[noisy.length - 1]);
+  const mid = smooth.slice(10, -10).map((p) => Math.abs(p[1]));
+  assert.ok(Math.max(...mid) < 0.5, `residual wobble ${Math.max(...mid)}`);
+});
+
+test('cleanVisibility fills flicker gaps and drops specks', () => {
+  const T = true;
+  const F = false;
+  assert.deepEqual(cleanVisibility([T, T, T, T, T, F, T, T, T, T, T], 3, 5), Array(11).fill(T));
+  assert.deepEqual(cleanVisibility([F, F, F, F, T, T, F, F, F, F], 1, 5), Array(10).fill(F));
+});
+
+test('strokeOutline makes a closed shape of the requested width', () => {
+  const o = strokeOutline([[0, 0], [10, 0]], [0.5, 0.5]);
+  const ys = o.map((p) => p[1]);
+  assert.ok(Math.abs(Math.max(...ys) - 0.5) < 1e-9 && Math.abs(Math.min(...ys) + 0.5) < 1e-9);
+  const xs = o.map((p) => p[0]);
+  assert.ok(Math.min(...xs) < 0 && Math.max(...xs) > 10, 'round caps extend past the ends');
+});
+
+test('knockout cuts lines where they pass near trails', () => {
+  const mask = lineMask([[[0, 5], [20, 5]]], 1, 20, 20);
+  const parts = knockout([[[10, 0], [10, 10]]], mask);
+  assert.equal(parts.length, 2);
+  assert.ok(parts[0][parts[0].length - 1][1] < 4.1 && parts[1][0][1] > 5.9);
+});
+
+// Bounding box of path data; arcs counted by endpoint ± radius.
+function pathBox(d) {
+  const toks = d.match(/[MLCQAZ]|-?\d*\.?\d+(?:e-?\d+)?/g) || [];
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  const add = (x, y) => {
+    b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y);
+  };
+  let i = 0;
+  let cmd = '';
+  const n = () => +toks[i++];
+  while (i < toks.length) {
+    if (/[A-Z]/.test(toks[i])) cmd = toks[i++];
+    if (cmd === 'Z') continue;
+    if (cmd === 'M' || cmd === 'L') add(n(), n());
+    else if (cmd === 'Q') { add(n(), n()); add(n(), n()); }
+    else if (cmd === 'C') { add(n(), n()); add(n(), n()); add(n(), n()); }
+    else if (cmd === 'A') { const r = n(); n(); n(); n(); n(); const x = n(); const y = n(); add(x - r, y - r); add(x + r, y + r); }
+    else i++;
+  }
+  return b;
+}
+
+test('lift ticket keeps every element on the ticket and clear of the notches', async () => {
+  const model = coneModel();
+  const dem = coneFor(model);
+  attachElevation(model, dem);
+  const stats = computeStats({ center: model.center, statistics: null }, model, dem);
+  const fonts = {
+    title: await loadFont('cinzel', fontLoader),
+    body: await loadFont('montserrat', fontLoader),
+    bold: await loadFont('montserrat-bold', fontLoader),
+    script: await loadFont('great-vibes', fontLoader),
+  };
+  const tpl = TEMPLATES.find((t) => t.id === 'ticket');
+  const sizes = [...tpl.sizes, { w: 101.6, h: 101.6 }, { w: 76.2, h: 127 }];
+  for (const size of sizes) {
+    for (const many of [false, true]) {
+      const scene = buildScene(model, dem, { ...DEFAULT_VIEW, azimuth: 270 });
+      const content = buildContent(stats, {
+        texts: { title: many ? 'Whistler Blackcomb Resort' : 'Cone', subtitle: 'British Columbia · Canada', personal: many ? 'Our first run together · 2026' : '', header: 'Lift Ticket · 2026/27 Season', stub: 'Admit One' },
+        stats: many ? { summit: true, base: true, vertical: true, trails: true, lifts: true, difficulty: true } : { summit: true, trails: true, difficulty: true },
+        overrides: {}, units: 'ft', coordStyle: many ? 'dms' : 'decimal', coordSource: 'center', showCoords: true, showSerial: true, convention: 'north_america',
+      });
+      const doc = composeDesign({ template: tpl, W: size.w, H: size.h, scene, content, fonts, options: { titleScale: many ? 1.4 : 1, smallCaps: true, border: true, cornerRadius: 3 }, artOptions: {} });
+      const { w: W, h: H } = size;
+      const u = Math.min(H, W / 1.55);
+      const edge = u * 0.065;
+      const px = Math.min(W * 0.215, u * 0.36);
+      const notchR = u * 0.1;
+      for (const it of doc.items) {
+        if (it.layer === 'frame') continue;
+        const [x0, y0, x1, y1] = pathBox(it.d);
+        const where = `${W}x${H} ${many ? 'busy' : 'plain'} ${it.layer} [${x0.toFixed(1)},${y0.toFixed(1)},${x1.toFixed(1)},${y1.toFixed(1)}]`;
+        assert.ok(x0 >= edge - 0.05 && y0 >= edge - 0.05 && x1 <= W - edge + 0.05 && y1 <= H - edge + 0.05, `off the ticket: ${where}`);
+        for (const [cx, cy] of [[px, u * 0.03], [px, H - u * 0.03]]) {
+          const nx = Math.max(x0, Math.min(cx, x1));
+          const ny = Math.max(y0, Math.min(cy, y1));
+          assert.ok(Math.hypot(nx - cx, ny - cy) >= notchR, `in a notch: ${where}`);
+        }
+      }
+    }
+  }
+});
+
+test('bold trail style engraves trails as filled shapes', async () => {
+  const model = coneModel();
+  const dem = coneFor(model);
+  attachElevation(model, dem);
+  const scene = buildScene(model, dem, { ...DEFAULT_VIEW, azimuth: 270 });
+  const { Doc, placeArt } = await import('../js/render/art.js');
+  const bold = new Doc(100, 100);
+  placeArt(bold, scene, { x: 5, y: 5, w: 90, h: 60 }, null, { trailStyle: 'bold' });
+  assert.ok(bold.items.some((i) => i.layer === 'trails' && i.kind === 'fill'));
+  const line = new Doc(100, 100);
+  placeArt(line, scene, { x: 5, y: 5, w: 90, h: 60 }, null, { trailStyle: 'line' });
+  assert.ok(line.items.some((i) => i.layer === 'trails' && i.kind === 'stroke'));
+  assert.ok(!line.items.some((i) => i.layer === 'trails' && i.kind === 'fill'));
 });

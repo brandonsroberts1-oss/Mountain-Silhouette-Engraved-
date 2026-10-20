@@ -321,3 +321,178 @@ export function rectPath(x, y, w, h, r = 0) {
     `V${f(y + r)}A${f(r)} ${f(r)} 0 0 1 ${f(x + r)} ${f(y)}Z`
   );
 }
+
+/** Resample at uniform arc-length spacing (both endpoints kept). */
+export function resample(pts, spacing) {
+  if (pts.length < 2) return pts.slice();
+  const total = polylineLength(pts);
+  const n = Math.max(1, Math.round(total / spacing));
+  const step = total / n;
+  const out = [pts[0]];
+  let seg = 0;
+  let segStart = 0;
+  let segLen = dist(pts[0], pts[1]);
+  for (let k = 1; k < n; k++) {
+    const target = k * step;
+    while (segStart + segLen < target && seg < pts.length - 2) {
+      segStart += segLen;
+      seg++;
+      segLen = dist(pts[seg], pts[seg + 1]);
+    }
+    const t = segLen > 0 ? Math.min(1, (target - segStart) / segLen) : 0;
+    out.push(lerp(pts[seg], pts[seg + 1], t));
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+/**
+ * Gaussian smoothing of a uniformly sampled polyline. `sigma` is in samples.
+ * The window shrinks symmetrically near the ends, so endpoints stay put.
+ */
+export function gaussianSmooth(pts, sigma) {
+  const n = pts.length;
+  if (sigma <= 0 || n < 3) return pts.slice();
+  const R = Math.ceil(sigma * 2.5);
+  const w = Array.from({ length: R + 1 }, (_, k) => Math.exp(-(k * k) / (2 * sigma * sigma)));
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = Math.min(R, i, n - 1 - i);
+    let sx = 0;
+    let sy = 0;
+    let sw = 0;
+    for (let k = -r; k <= r; k++) {
+      const wk = w[k < 0 ? -k : k];
+      sx += pts[i + k][0] * wk;
+      sy += pts[i + k][1] * wk;
+      sw += wk;
+    }
+    out[i] = [sx / sw, sy / sw];
+  }
+  return out;
+}
+
+/** Smooth SVG path data: Catmull–Rom through the points, as cubic Béziers. */
+export function smoothPathData(lines, precision = 3) {
+  const f = (v) => fmt(v, precision);
+  let d = '';
+  for (const l of lines) {
+    if (l.length < 2) continue;
+    d += `M${f(l[0][0])} ${f(l[0][1])}`;
+    if (l.length === 2) {
+      d += `L${f(l[1][0])} ${f(l[1][1])}`;
+      continue;
+    }
+    for (let i = 0; i < l.length - 1; i++) {
+      const p0 = l[i - 1] || l[i];
+      const p1 = l[i];
+      const p2 = l[i + 1];
+      const p3 = l[i + 2] || l[i + 1];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += `C${f(c1x)} ${f(c1y)} ${f(c2x)} ${f(c2y)} ${f(p2[0])} ${f(p2[1])}`;
+    }
+  }
+  return d;
+}
+
+/**
+ * Closed outline of a stroke with per-point half-widths and round caps, so a
+ * line can be engraved as a solid filled shape.
+ */
+export function strokeOutline(pts, halfWidths) {
+  const n = pts.length;
+  if (n < 2) return [];
+  const dirs = [];
+  for (let i = 0; i < n - 1; i++) {
+    const dx = pts[i + 1][0] - pts[i][0];
+    const dy = pts[i + 1][1] - pts[i][1];
+    const len = Math.hypot(dx, dy) || 1;
+    dirs.push([dx / len, dy / len]);
+  }
+  const left = [];
+  const right = [];
+  for (let i = 0; i < n; i++) {
+    const a = dirs[Math.max(0, i - 1)];
+    const b = dirs[Math.min(n - 2, i)];
+    let tx = a[0] + b[0];
+    let ty = a[1] + b[1];
+    const tl = Math.hypot(tx, ty);
+    if (tl < 1e-9) {
+      tx = b[0];
+      ty = b[1];
+    } else {
+      tx /= tl;
+      ty /= tl;
+    }
+    // Miter scale, limited so sharp turns don't spike.
+    const cos = tx * b[0] + ty * b[1];
+    const k = Math.min(2, 1 / Math.max(0.5, cos));
+    const hw = halfWidths[i] * k;
+    left.push([pts[i][0] - ty * hw, pts[i][1] + tx * hw]);
+    right.push([pts[i][0] + ty * hw, pts[i][1] - tx * hw]);
+  }
+  const cap = (p, t, r, sign) => {
+    const out = [];
+    const steps = 8;
+    for (let s = 1; s < steps; s++) {
+      const a = (Math.PI * s) / steps;
+      // Normal (left) is [-t.y, t.x]; sweep from left, through the tip, to right.
+      const nx = -t[1] * sign;
+      const ny = t[0] * sign;
+      out.push([p[0] + r * (nx * Math.cos(a) + t[0] * sign * Math.sin(a)), p[1] + r * (ny * Math.cos(a) + t[1] * sign * Math.sin(a))]);
+    }
+    return out;
+  };
+  const end = cap(pts[n - 1], dirs[n - 2], halfWidths[n - 1], 1);
+  const start = cap(pts[0], dirs[0], halfWidths[0], -1);
+  return [...left, ...end, ...right.reverse(), ...start];
+}
+
+/**
+ * Raster mask of the area within `radius` of the given lines, for knocking
+ * other lines out around them. Coordinates in mm; `cell` is the resolution.
+ */
+export function lineMask(lines, radius, W, H, cell = 0.1) {
+  const nx = Math.ceil(W / cell) + 1;
+  const ny = Math.ceil(H / cell) + 1;
+  const grid = new Uint8Array(nx * ny);
+  const r = Math.max(1, Math.round(radius / cell));
+  const offsets = [];
+  for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) if (di * di + dj * dj <= r * r) offsets.push(di, dj);
+  for (const l of lines) {
+    for (const [x, y] of densify(l, cell)) {
+      const ci = Math.round(x / cell);
+      const cj = Math.round(y / cell);
+      for (let k = 0; k < offsets.length; k += 2) {
+        const i = ci + offsets[k];
+        const j = cj + offsets[k + 1];
+        if (i >= 0 && j >= 0 && i < nx && j < ny) grid[j * nx + i] = 1;
+      }
+    }
+  }
+  return (x, y) => {
+    const i = Math.round(x / cell);
+    const j = Math.round(y / cell);
+    return i >= 0 && j >= 0 && i < nx && j < ny && grid[j * nx + i] === 1;
+  };
+}
+
+/** Split lines wherever they enter the mask. */
+export function knockout(lines, masked, cell = 0.1) {
+  const out = [];
+  for (const l of lines) {
+    let cur = null;
+    for (const p of densify(l, cell)) {
+      if (masked(p[0], p[1])) {
+        cur = null;
+      } else {
+        if (!cur) out.push((cur = []));
+        cur.push(p);
+      }
+    }
+  }
+  return out.filter((l) => l.length >= 2);
+}

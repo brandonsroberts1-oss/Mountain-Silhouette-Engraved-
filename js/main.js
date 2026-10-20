@@ -12,15 +12,16 @@ import {
 } from './format.js';
 
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
-const STORAGE_KEY = 'fall-line-studio:v1';
+const STORAGE_KEY = 'fall-line-studio:v2';
+const LEGACY_KEYS = ['fall-line-studio:v1'];
 
 const DEFAULTS = {
   template: 'summit',
   sizeId: 'sq4',
   customW: 101.6,
   customH: 101.6,
-  view: { mode: '3d', terrain: 'outline', azimuthOffset: 0, pitch: 24, exaggeration: 1.7, ridgeCount: 48, isolate: true, smooth: 1, contourInterval: 0 },
-  art: { liftStyle: 'dashed', zoom: 1, offsetY: 0, highlightMarker: 'star' },
+  view: { mode: '3d', terrain: 'ridges', azimuthOffset: 0, pitch: 24, exaggeration: 1.7, ridgeCount: 48, isolate: true, smooth: 2, contourInterval: 0 },
+  art: { liftStyle: 'dashed', zoom: 1, offsetY: 0, highlightMarker: 'star', trailStyle: 'bold', trailWidth: 0.4, taper: true, knockout: true },
   text: { titleFont: 'cinzel', bodyFont: 'montserrat', titleScale: 1, smallCaps: true, border: true, dividers: true },
   stats: { summit: true, base: false, vertical: true, trails: true, lifts: false, difficulty: true },
   units: 'ft',
@@ -36,7 +37,23 @@ const $ = (id) => document.getElementById(id);
 
 function loadSettings() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    let saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (!saved) {
+      // Older versions: keep the user's choices and last mountain, but adopt
+      // the new trail rendering and the 3D ridgeline default.
+      for (const key of LEGACY_KEYS) {
+        const old = JSON.parse(localStorage.getItem(key) || 'null');
+        if (old && old.settings) {
+          delete old.settings.art?.trailStyle;
+          if (old.settings.view) {
+            delete old.settings.view.smooth;
+            if (old.settings.view.mode !== 'map') old.settings.view.terrain = 'ridges';
+          }
+          saved = old;
+          break;
+        }
+      }
+    }
     if (saved && saved.settings) {
       const s = structuredClone(DEFAULTS);
       for (const k of Object.keys(s)) {
@@ -199,6 +216,10 @@ async function renderNow() {
       highlight: current.highlight,
       highlightMarker: settings.art.highlightMarker,
       layerByDifficulty: settings.export.layerByDifficulty,
+      trailStyle: settings.art.trailStyle,
+      trailWidth: settings.art.trailWidth,
+      taper: settings.art.taper,
+      knockout: settings.art.knockout,
     },
   });
   lastDoc = doc;
@@ -466,6 +487,10 @@ const BINDINGS = [
   ['offsetY', () => settings.art.offsetY, (v) => (settings.art.offsetY = +v), 'range', (v) => `${Math.round(v * 100)}%`],
   ['titleScale', () => settings.text.titleScale, (v) => (settings.text.titleScale = +v), 'range', (v) => `${Math.round(v * 100)}%`],
   ['isolate', () => settings.view.isolate, (v) => (settings.view.isolate = v), 'check'],
+  ['trailStyle', () => settings.art.trailStyle, (v) => (settings.art.trailStyle = v), 'select'],
+  ['trailWidth', () => settings.art.trailWidth, (v) => (settings.art.trailWidth = +v), 'range', (v) => `${(+v).toFixed(2)} mm`],
+  ['taper', () => settings.art.taper, (v) => (settings.art.taper = v), 'check'],
+  ['knockout', () => settings.art.knockout, (v) => (settings.art.knockout = v), 'check'],
   ['contourInterval', () => String(settings.view.contourInterval), (v) => (settings.view.contourInterval = +v), 'select'],
   ['terrain', () => settings.view.terrain, (v) => (settings.view.terrain = v), 'select'],
   ['liftStyle', () => settings.art.liftStyle, (v) => (settings.art.liftStyle = v), 'select'],
@@ -526,7 +551,7 @@ function wireControls() {
     const v = e.target.closest('button')?.dataset.value;
     if (!v || v === settings.view.mode) return;
     settings.view.mode = v;
-    settings.view.terrain = v === 'map' ? 'contours' : 'outline';
+    settings.view.terrain = v === 'map' ? 'contours' : 'ridges';
     syncControls();
     schedule();
   });
@@ -601,7 +626,7 @@ function syncControls() {
   terrainSel.innerHTML = '';
   const opts = settings.view.mode === 'map'
     ? [['contours', 'Contour lines'], ['none', 'None']]
-    : [['outline', 'Mountain outline'], ['ridges', 'Ridgelines'], ['none', 'None']];
+    : [['ridges', '3D ridgelines'], ['outline', 'Mountain outline'], ['none', 'None']];
   for (const [v, l] of opts) terrainSel.append(new Option(l, v));
   if (!opts.some(([v]) => v === settings.view.terrain)) settings.view.terrain = opts[0][0];
 
@@ -626,6 +651,7 @@ function syncVisibility() {
   document.querySelectorAll('.only-map').forEach((el) => el.classList.toggle('hidden', is3d));
   document.querySelectorAll('.only-ridges').forEach((el) => el.classList.toggle('hidden', settings.view.terrain !== 'ridges'));
   document.querySelectorAll('.only-ticket').forEach((el) => el.classList.toggle('hidden', tpl.id !== 'ticket'));
+  document.querySelectorAll('.only-bold').forEach((el) => el.classList.toggle('hidden', settings.art.trailStyle === 'line'));
   $('dividers').closest('label').classList.toggle('hidden', tpl.id !== 'summit');
 }
 

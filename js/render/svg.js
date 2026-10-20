@@ -45,11 +45,28 @@ function layerColor(id, colorMode) {
   return (LAYERS.find((l) => l.id === id) || LAYERS[1]).color;
 }
 
-/** Layer ids present in a doc, in canonical order. */
+/**
+ * Layers present in a doc, in canonical order, with the operation that suits
+ * them: filled shapes engrave, open lines score.
+ */
 export function usedLayers(doc, includeCut) {
-  const ids = new Set(doc.items.map((i) => i.layer));
-  if (includeCut && doc.cut) ids.add('cut');
-  return LAYERS.filter((l) => ids.has(l.id));
+  const kinds = new Map();
+  for (const it of doc.items) {
+    if (!kinds.has(it.layer)) kinds.set(it.layer, new Set());
+    kinds.get(it.layer).add(it.kind);
+  }
+  const out = [];
+  for (const l of LAYERS) {
+    if (l.id === 'cut') {
+      if (includeCut && doc.cut) out.push(l);
+      continue;
+    }
+    const k = kinds.get(l.id);
+    if (!k) continue;
+    const op = k.has('fill') && k.has('stroke') ? 'Engrave + score' : k.has('fill') ? 'Engrave (fill)' : l.op;
+    out.push({ ...l, op });
+  }
+  return out;
 }
 
 /**
