@@ -106,7 +106,7 @@ GitHub Pages caches files for about 10 minutes. After an update, hard-refresh
 (Ctrl/Cmd+Shift+R) and check the version and data date at the bottom of the page.
 
 To run the app locally with bundled data, run `npm run build-data` (downloads
-about 1 GB from OpenSkiData) and then `node serve.mjs`.
+the OpenSkiData files) and then `node serve.mjs`.
 
 ## Data sources and accuracy
 
@@ -116,7 +116,9 @@ OpenSkiMap's published GeoJSON files (`ski_areas`, `runs`, `lifts` from
 search index (`data/index.json`) and one small file per ski area
 (`data/areas/<id>.json`), and publishes them to GitHub Pages with the app. The
 browser loads trails from the app's own site, so it doesn't depend on
-third-party APIs being reachable, fast or CORS-friendly.
+third-party APIs being reachable, fast or CORS-friendly. Downloads that fail
+(the download server sometimes times out) are retried for several minutes, and
+if they still fail, the site is deployed with the previous week's data.
 
 Following OpenSkiData's terms, the app does **not** use OpenSkiMap's map tiles
 directly.

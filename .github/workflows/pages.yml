@@ -38,14 +38,29 @@ jobs:
           node-version: 22
       - id: week
         run: echo "key=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      # Restores this week's data, or failing that the newest older copy.
       - id: data-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _data
           key: openskimap-data-v1-${{ steps.week.outputs.key }}${{ inputs.refresh && format('-{0}', github.run_id) || '' }}
+          restore-keys: openskimap-data-v1-
       - name: Build trail data from OpenSkiMap downloads
+        id: build-data
         if: steps.data-cache.outputs.cache-hit != 'true'
-        run: node --max-old-space-size=6144 scripts/build-data.mjs --out _data
+        # With an older copy restored, a failed download deploys that copy
+        # instead of failing the whole site update.
+        continue-on-error: ${{ steps.data-cache.outputs.cache-matched-key != '' }}
+        run: |
+          node --max-old-space-size=6144 scripts/build-data.mjs --out _data_new --download-dir "$RUNNER_TEMP/openskimap"
+          rm -rf _data && mv _data_new _data
+      - if: steps.build-data.outcome == 'failure'
+        run: echo "::warning::Trail data download failed; deploying the previous copy (${{ steps.data-cache.outputs.cache-matched-key }})"
+      - if: steps.build-data.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: _data
+          key: ${{ steps.data-cache.outputs.cache-primary-key }}
       - name: Assemble site
         run: |
           mkdir -p _site

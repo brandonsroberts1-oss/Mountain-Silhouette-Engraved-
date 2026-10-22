@@ -426,7 +426,8 @@ test('exported art layers never overlap (no spot is burned twice)', async () => 
 // Data loading: tile decoding, deadlines and Overpass mirror racing.
 
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import os from 'node:os';
 import { writeOpenSkiMapFixture } from './helpers/openskimap-fixture.mjs';
 
@@ -500,6 +501,49 @@ test('build-data turns OpenSkiMap downloads into an index and per-area files', (
   assert.deepEqual(zurs.runs.map((r) => r.n), ['Madloch'], 'line runs preferred over area outlines');
   assert.ok(fs.existsSync(path.join(tmp, 'out/LICENSE.txt')));
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('build-data retries a 524 and a cut-off download, and gives up on a 404', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fls-dl-'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/synthetic-area.json'), 'utf8'));
+  writeOpenSkiMapFixture(path.join(tmp, 'src'), fixture);
+  const hits = {};
+  const srv = http.createServer((req, res) => {
+    const name = path.basename(req.url);
+    const n = (hits[name] = (hits[name] || 0) + 1);
+    const file = path.join(tmp, 'src', name);
+    if (req.url.startsWith('/missing/') || !fs.existsSync(file)) return res.writeHead(404).end();
+    const body = fs.readFileSync(file);
+    if (name === 'ski_areas.geojson' && n === 1) return res.writeHead(524).end();
+    if (name === 'runs.geojson' && n === 1) {
+      // Promise the whole file, send half, then drop the connection.
+      res.writeHead(200, { 'Content-Length': body.length });
+      res.write(body.subarray(0, body.length >> 1));
+      return setTimeout(() => res.destroy(), 20);
+    }
+    res.writeHead(200, { 'Content-Length': body.length }).end(body);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const run = (url) =>
+    promisify(execFile)('node', [path.join(ROOT, 'scripts/build-data.mjs'), '--source-base-url', url, '--download-dir', path.join(tmp, 'dl'), '--out', path.join(tmp, 'out')], {
+      env: { ...process.env, BUILD_DATA_RETRY_WAITS: '0,0' },
+    });
+  try {
+    const { stdout } = await run(base);
+    assert.match(stdout, /failed after .*524.*retrying/);
+    assert.match(stdout, /runs\.geojson \(attempt 2\)/);
+    assert.deepEqual(hits, { 'ski_areas.geojson': 2, 'runs.geojson': 2, 'lifts.geojson': 1 });
+    const meta = JSON.parse(fs.readFileSync(path.join(tmp, 'out/index.json'), 'utf8'));
+    assert.equal(meta.areas.length, 2);
+    for (const k of Object.keys(hits)) delete hits[k];
+    await assert.rejects(run(`${base}/missing`), (err) => /404 Not Found/.test(err.stderr));
+    assert.equal(hits['ski_areas.geojson'], 1, 'a 404 is not retried');
+  } finally {
+    srv.closeAllConnections();
+    srv.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('bundled search ranks name matches, ignores accents and finds places', async () => {

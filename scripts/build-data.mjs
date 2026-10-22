@@ -9,12 +9,15 @@
 //   node scripts/build-data.mjs --out _site/data
 //   node scripts/build-data.mjs --out data --source-dir ./downloads   (local files)
 //   node scripts/build-data.mjs --out data --only "Mount Snow,Jackson Hole"
+//   --download-dir DIR   where downloads are kept (default: OS temp dir)
 //
 // Data © OpenStreetMap contributors (ODbL), processed by OpenSkiMap.
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]] : acc), [])
@@ -22,6 +25,7 @@ const args = Object.fromEntries(
 const OUT = path.resolve(args.out || 'data');
 const SOURCE = args['source-base-url'] || 'https://tiles.openskimap.org/geojson';
 const SOURCE_DIR = args['source-dir'] ? path.resolve(args['source-dir']) : null;
+const DOWNLOAD_DIR = path.resolve(args['download-dir'] || path.join(os.tmpdir(), 'openskimap-downloads'));
 const ONLY = args.only ? String(args.only).split(',').map((s) => norm(s)).filter(Boolean) : null;
 const SKIP_LIFTS = new Set(['magic_carpet', 'zip_line', 'funicular', 'railway', 'rack_railway', 'canopy', 'platter_station']);
 
@@ -80,13 +84,62 @@ async function* features(stream) {
   }
 }
 
-async function open(name) {
-  if (SOURCE_DIR) return fs.createReadStream(path.join(SOURCE_DIR, name), { highWaterMark: Number(process.env.BUILD_DATA_CHUNK) || 1 << 16 });
+// The download server sits behind Cloudflare and now and then answers 524
+// (origin timeout) or drops a transfer, so each file is downloaded to disk in
+// full, checked against Content-Length and retried with growing waits.
+const RETRY_WAITS = (process.env.BUILD_DATA_RETRY_WAITS || '30,60,120,240,300').split(',').map(Number);
+const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
+
+async function downloadOnce(url, dest) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'fall-line-studio data build (github.com)', 'Accept-Encoding': 'identity' },
+    signal: AbortSignal.timeout(30 * 60e3),
+  });
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    const err = new Error(`${res.status}${res.statusText ? ` ${res.statusText}` : ''} for ${url}`);
+    err.retry = res.status >= 500 || res.status === 408 || res.status === 429;
+    throw err;
+  }
+  const expected = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length')) || 0;
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(`${dest}.part`));
+  const size = fs.statSync(`${dest}.part`).size;
+  if (expected && size !== expected) throw new Error(`download of ${url} stopped at ${size} of ${expected} bytes`);
+  fs.renameSync(`${dest}.part`, dest);
+  return size;
+}
+
+async function download(name) {
   const url = `${SOURCE}/${name}`;
-  console.log(`Downloading ${url}`);
-  const res = await fetch(url, { headers: { 'User-Agent': 'fall-line-studio data build (github.com)' } });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  return Readable.fromWeb(res.body);
+  const dest = path.join(DOWNLOAD_DIR, name);
+  for (let attempt = 1; ; attempt++) {
+    const t = Date.now();
+    console.log(`Downloading ${url}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+    try {
+      const size = await downloadOnce(url, dest);
+      console.log(`  ${(size / 1e6).toFixed(1)} MB in ${((Date.now() - t) / 1000).toFixed(0)} s`);
+      return dest;
+    } catch (err) {
+      const wait = RETRY_WAITS[attempt - 1];
+      if (err.retry === false || wait == null) throw err;
+      console.log(`  failed after ${((Date.now() - t) / 1000).toFixed(0)} s: ${err.message}; retrying in ${wait} s`);
+      await sleep(wait);
+    }
+  }
+}
+
+function open(file) {
+  return fs.createReadStream(file, { highWaterMark: Number(process.env.BUILD_DATA_CHUNK) || 1 << 16 });
+}
+
+/** Local paths of the three source files, downloading them unless --source-dir is given. */
+async function sources() {
+  const names = ['ski_areas.geojson', 'runs.geojson', 'lifts.geojson'];
+  if (SOURCE_DIR) return names.map((n) => path.join(SOURCE_DIR, n));
+  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  const files = [];
+  for (const n of names) files.push(await download(n));
+  return files;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,10 +214,11 @@ const areaIds = (p) => (p.skiAreas || []).map((sa) => (typeof sa === 'string' ? 
 
 async function main() {
   const t0 = Date.now();
+  const [skiAreasFile, runsFile, liftsFile] = await sources();
   const areas = new Map(); // id -> index entry
   const buckets = new Map(); // id -> { runs: [json strings], areaRuns: [], lifts: [] }
 
-  for await (const f of features(await open('ski_areas.geojson'))) {
+  for await (const f of features(open(skiAreasFile))) {
     const p = f.properties || {};
     if (!p.id || !p.name) continue;
     if (p.activities && !p.activities.includes('downhill')) continue;
@@ -197,7 +251,7 @@ async function main() {
   };
 
   let nRuns = 0;
-  for await (const f of features(await open('runs.geojson'))) {
+  for await (const f of features(open(runsFile))) {
     const p = f.properties || {};
     if (!(p.uses || []).includes('downhill')) continue;
     const ids = areaIds(p).filter((id) => areas.has(id));
@@ -215,7 +269,7 @@ async function main() {
   console.log(`downhill runs: ${nRuns} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 
   let nLifts = 0;
-  for await (const f of features(await open('lifts.geojson'))) {
+  for await (const f of features(open(liftsFile))) {
     const p = f.properties || {};
     if (SKIP_LIFTS.has(p.liftType)) continue;
     if (p.status && p.status !== 'operating') continue;
