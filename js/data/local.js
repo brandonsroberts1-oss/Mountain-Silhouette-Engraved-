@@ -8,7 +8,7 @@ const BASE = new URL('../../data/', import.meta.url);
 let indexPromise = null;
 let indexMeta = null;
 
-/** { built, count } of the bundled data, once the index has loaded. */
+/** { built, count, sourceName, sourceUrl } of the bundled data, once the index has loaded. */
 export function bundledInfo() {
   return indexMeta;
 }
@@ -27,7 +27,7 @@ export function loadIndex(signal) {
   if (!indexPromise) {
     indexPromise = fetchWithTimeout(new URL('index.json', BASE).href, { kind: 'api', signal })
       .then((meta) => {
-        indexMeta = { built: meta.built, count: meta.areas.length };
+        indexMeta = { built: meta.built, count: meta.areas.length, sourceName: meta.sourceName || 'OpenSkiMap', sourceUrl: meta.sourceUrl || 'https://openskimap.org' };
         const at = Object.fromEntries(meta.fields.map((f, i) => [f, i]));
         return meta.areas.map((row) => {
           const area = toArea(row, at);
@@ -106,6 +106,6 @@ export async function fetchLocalArea(area, { signal } = {}) {
     area: entry,
     runs: data.runs.map((r) => ({ name: r.n, difficulty: r.d, coords: r.c })),
     lifts: data.lifts.map((l) => ({ name: l.n, type: l.t, coords: l.c })),
-    source: 'bundled OpenSkiMap data',
+    source: `bundled ${indexMeta.sourceName} data`,
   };
 }

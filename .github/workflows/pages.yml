@@ -1,14 +1,15 @@
 name: pages
 
 # Builds the self-hosted trail data from OpenSkiMap's published GeoJSON
-# downloads and publishes it to GitHub Pages together with the app, so the
+# downloads (or, when those are unavailable, OpenSnowMap's OpenStreetMap piste
+# extract) and publishes it to GitHub Pages together with the app, so the
 # browser loads trails from this site instead of third-party APIs.
 #
-# Data is rebuilt once a week (cached in between). If OpenSkiMap's download
-# server is down, the newest earlier copy is deployed instead; if there is no
-# earlier copy yet, the app is deployed without bundled data (it falls back to
-# live APIs) and the run is marked failed so it gets noticed. The daily
-# schedule retries until a build succeeds.
+# OpenSkiMap data is rebuilt once a week (cached in between). Fallback data
+# is cached too, but the next daily run tries OpenSkiMap again. If no data
+# can be built, the newest earlier copy is deployed; if there is none yet, the
+# app is deployed without bundled data (it falls back to live APIs) and the
+# run is marked failed so it gets noticed.
 #
 # One-time setup: Settings → Pages → Build and deployment → Source: "GitHub Actions".
 
@@ -51,20 +52,23 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _data
-          key: openskimap-data-v1-${{ steps.week.outputs.key }}${{ inputs.refresh && format('-{0}', github.run_id) || '' }}
-          restore-keys: openskimap-data-v1-
-      - name: Build trail data from OpenSkiMap downloads
+          key: trail-data-v1-${{ steps.week.outputs.key }}${{ inputs.refresh && format('-{0}', github.run_id) || '' }}
+          restore-keys: trail-data-v1-
+      - name: Build trail data
         id: build-data
         if: steps.data-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
-          node --max-old-space-size=6144 scripts/build-data.mjs --out _data_new --download-dir "$RUNNER_TEMP/openskimap"
+          node --max-old-space-size=6144 scripts/build-data.mjs --out _data_new --download-dir "$RUNNER_TEMP/trail-data"
           rm -rf _data && mv _data_new _data
+          echo "source=$(node -p "require('./_data/index.json').sourceName")" >> "$GITHUB_OUTPUT"
+      # Only OpenSkiMap data counts as this week's copy; fallback data is saved
+      # under a key the next run restores but doesn't stop at.
       - if: steps.build-data.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: _data
-          key: ${{ steps.data-cache.outputs.cache-primary-key }}
+          key: ${{ steps.build-data.outputs.source == 'OpenSkiMap' && steps.data-cache.outputs.cache-primary-key || format('trail-data-v1-fallback-{0}', github.run_id) }}
       - name: Assemble site
         id: assemble
         run: |
@@ -73,7 +77,7 @@ jobs:
           touch _site/.nojekyll
           if [ -f _data/index.json ]; then
             cp -r _data _site/data
-            echo "Trail data: $(du -sh _site/data | cut -f1), $(ls _site/data/areas | wc -l) ski areas"
+            echo "Trail data: $(du -sh _site/data | cut -f1), $(ls _site/data/areas | wc -l) ski areas from $(node -p "require('./_data/index.json').sourceName || 'OpenSkiMap'")"
             if [ "${{ steps.build-data.outcome }}" = failure ]; then
               echo "::warning::Trail data download failed; deploying the previous copy (${{ steps.data-cache.outputs.cache-matched-key }})"
             fi

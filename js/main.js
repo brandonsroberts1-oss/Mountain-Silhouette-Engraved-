@@ -13,7 +13,7 @@ import {
 } from './format.js';
 
 // Shown in the footer so a stale cached copy is easy to spot.
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.5.1';
 
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
 const STORAGE_KEY = 'fall-line-studio:v2';
@@ -766,7 +766,10 @@ $('app-version').textContent = `v${APP_VERSION}`;
 // Preload the bundled ski-area index (if this deployment has one) and say how fresh it is.
 loadIndex().then(() => {
   const info = bundledInfo();
-  if (info) $('app-version').textContent = `v${APP_VERSION} · ${info.count.toLocaleString('en-US')} ski areas, data ${info.built.slice(0, 10)}`;
+  if (!info) return;
+  $('app-version').textContent = `v${APP_VERSION} · ${info.count.toLocaleString('en-US')} ski areas, data ${info.built.slice(0, 10)}`;
+  $('data-via').textContent = info.sourceName;
+  $('data-via').href = info.sourceUrl;
 });
 buildStaticControls();
 wireControls();

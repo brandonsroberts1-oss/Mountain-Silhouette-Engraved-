@@ -105,7 +105,8 @@ GitHub Pages caches files for about 10 minutes. After an update, hard-refresh
 (Ctrl/Cmd+Shift+R) and check the version and data date at the bottom of the page.
 
 To run the app locally with bundled data, run `npm run build-data` (downloads
-the OpenSkiData files) and then `node serve.mjs`.
+the OpenSkiData files, or OpenSnowMap's extract if those are unavailable) and
+then `node serve.mjs`.
 
 ## Data sources and accuracy
 
@@ -115,11 +116,18 @@ OpenSkiMap's published GeoJSON files (`ski_areas`, `runs`, `lifts` from
 search index (`data/index.json`) and one small file per ski area
 (`data/areas/<id>.json`), and publishes them to GitHub Pages with the app. The
 browser loads trails from the app's own site, so it doesn't depend on
-third-party APIs being reachable, fast or CORS-friendly. Downloads that fail
-(the download server sometimes times out) are retried for several minutes, and
-if they still fail, the site is deployed with the previous copy of the data
-(or, before the first successful build, without bundled data). The workflow runs
-daily, so a missed weekly refresh is retried the next day.
+third-party APIs being reachable, fast or CORS-friendly.
+
+If OpenSkiMap's download server is down (downloads are retried for several
+minutes first), the data is built from [OpenSnowMap](https://www.opensnowmap.org)'s
+daily OpenStreetMap piste extract (`planet_pistes.osm.gz`) instead. Ski areas
+then come from OpenStreetMap ski-area relations (`site=piste`) and named ski-area
+outlines (`landuse=winter_sports`), with state/country names from
+[Natural Earth](https://www.naturalearthdata.com); summit and base elevations
+come from the terrain data. The footer names the source in use. The workflow
+runs daily and goes back to OpenSkiMap data as soon as it's available. If
+neither source can be downloaded, the previous copy of the data is deployed
+(or, before the first successful build, the app without bundled data).
 
 Following OpenSkiData's terms, the app does **not** use OpenSkiMap's map tiles
 directly.
@@ -140,8 +148,10 @@ Every network request has a deadline. The loading pill shows elapsed time and a
 available.
 
 **Licence:** trail data © OpenStreetMap contributors (ODbL), with Skimap.org
-data, processed by OpenSkiMap. The published `data/` folder carries this notice
-in `data/LICENSE.txt`, and the app footer credits the sources.
+data, processed by OpenSkiMap (or, for the fallback, the OpenStreetMap extract
+courtesy of opensnowmap.org, with Natural Earth region names). The published
+`data/` folder carries the matching notice in `data/LICENSE.txt`, and the app
+footer credits the source in use.
 
 OpenStreetMap often splits a run into several segments and maps some glades or
 connectors without names. The trail count groups segments by name and only counts
@@ -159,7 +169,9 @@ js/format.js                   units, coordinates, difficulty conventions (NA / 
 js/fonts.js                    bundled OFL fonts (Fontsource WOFF, latin + latin-ext)
 js/data/                       bundled data (local.js), OpenSkiMap API, Overpass/Nominatim,
                                request deadlines (net.js), terrain tiles, model + stats
-scripts/build-data.mjs         OpenSkiMap GeoJSON downloads → data/index.json + data/areas/*.json
+scripts/build-data.mjs         trail data build → data/index.json + data/areas/*.json
+scripts/data/                  readers: OpenSkiMap GeoJSON, OpenSnowMap OSM XML (fallback),
+                               Natural Earth regions; downloads with retries
 .github/workflows/pages.yml    builds the data (weekly) and deploys app + data to GitHub Pages
 js/render/scene.js             3D oblique projection, ray-marched hidden lines,
                                floating-horizon ridgelines/outline, plan view + contours

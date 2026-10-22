@@ -430,6 +430,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import { writeOpenSkiMapFixture } from './helpers/openskimap-fixture.mjs';
+import { writeOsmPistesFixture } from './helpers/osm-fixture.mjs';
 
 /** Local test servers: 'hang' never answers, 'fail' returns 500, else JSON. */
 async function testServer(behaviour) {
@@ -525,8 +526,8 @@ test('build-data retries a 524 and a cut-off download, and gives up on a 404', a
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${srv.address().port}`;
-  const run = (url) =>
-    promisify(execFile)('node', [path.join(ROOT, 'scripts/build-data.mjs'), '--source-base-url', url, '--download-dir', path.join(tmp, 'dl'), '--out', path.join(tmp, 'out')], {
+  const run = (url, extra = []) =>
+    promisify(execFile)('node', [path.join(ROOT, 'scripts/build-data.mjs'), '--source-base-url', url, '--download-dir', path.join(tmp, 'dl'), '--out', path.join(tmp, 'out'), ...extra], {
       env: { ...process.env, BUILD_DATA_RETRY_WAITS: '0,0' },
     });
   try {
@@ -537,11 +538,95 @@ test('build-data retries a 524 and a cut-off download, and gives up on a 404', a
     const meta = JSON.parse(fs.readFileSync(path.join(tmp, 'out/index.json'), 'utf8'));
     assert.equal(meta.areas.length, 2);
     for (const k of Object.keys(hits)) delete hits[k];
-    await assert.rejects(run(`${base}/missing`), (err) => /404 Not Found/.test(err.stderr));
+    await assert.rejects(run(`${base}/missing`, ['--source', 'openskimap']), (err) => /404 Not Found/.test(err.stderr));
     assert.equal(hits['ski_areas.geojson'], 1, 'a 404 is not retried');
   } finally {
     srv.closeAllConnections();
     srv.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/** Serves files from dir under /files/; anything else answers 502. */
+async function fileServer(dir) {
+  const srv = http.createServer((req, res) => {
+    const file = path.join(dir, path.basename(req.url));
+    if (!req.url.startsWith('/files/') || !fs.existsSync(file)) return res.writeHead(502).end();
+    const body = fs.readFileSync(file);
+    res.writeHead(200, { 'Content-Length': body.length }).end(body);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { base: `http://127.0.0.1:${srv.address().port}`, close: () => (srv.closeAllConnections(), srv.close()) };
+}
+
+const readIndex = (dir) => {
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'));
+  const at = Object.fromEntries(meta.fields.map((f, i) => [f, i]));
+  return { meta, at, byName: Object.fromEntries(meta.areas.map((a) => [a[at.name], a])) };
+};
+
+test('build-data falls back to the OpenSnowMap OSM extract when OpenSkiMap is down', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fls-osm-'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/synthetic-area.json'), 'utf8'));
+  writeOsmPistesFixture(path.join(tmp, 'src'), fixture);
+  const s = await fileServer(path.join(tmp, 'src'));
+  try {
+    const { stdout } = await promisify(execFile)(
+      'node',
+      [
+        path.join(ROOT, 'scripts/build-data.mjs'),
+        '--source-base-url', `${s.base}/openskimap`,
+        '--opensnowmap-url', `${s.base}/files/planet_pistes.osm.gz`,
+        '--admin-url', `${s.base}/files/admin1.geojson`,
+        '--download-dir', path.join(tmp, 'dl'),
+        '--out', path.join(tmp, 'out'),
+      ],
+      { env: { ...process.env, BUILD_DATA_RETRY_WAITS: '0' } }
+    );
+    assert.match(stdout, /OpenSkiMap data unavailable \(502.*using OpenSnowMap/);
+    const { meta, at, byName } = readIndex(path.join(tmp, 'out'));
+    assert.equal(meta.sourceName, 'OpenSnowMap');
+    assert.deepEqual(Object.keys(byName).sort(), ['Duplicate Peak', 'Split Mountain', 'Test Peak', 'Zürs am Arlberg'], 'unnamed outlines are left out, same-named outline joins its site');
+    const peak = byName['Test Peak'];
+    assert.deepEqual([peak[at.region], peak[at.country], peak[at.cc], peak[at.convention]], ['Vermont', 'United States of America', 'US', 'north_america']);
+    assert.equal(peak[at.runs], fixture.features.runs.length, 'route-only runs included, nordic left out');
+    assert.equal(peak[at.lifts], fixture.features.lifts.length, 'magic carpets and abandoned lifts left out');
+    const zurs = byName['Zürs am Arlberg'];
+    assert.deepEqual([zurs[at.cc], zurs[at.convention], zurs[at.website]], ['AT', 'europe', 'https://example.at']);
+    const area = (a) => JSON.parse(fs.readFileSync(path.join(tmp, 'out/areas', `${a[at.id]}.json`), 'utf8'));
+    const runs = area(peak).runs;
+    const named = Object.fromEntries(runs.map((r) => [r.n, r.d]));
+    assert.equal(named["Bear's Den & Glades"], fixture.features.runs[2].difficulty, 'XML entities decoded');
+    assert.equal(named[fixture.features.runs[0].name], fixture.features.runs[0].difficulty, 'name and difficulty from a route relation');
+    assert.equal(named[fixture.features.runs[3].name], fixture.features.runs[3].difficulty, 'difficulty filled in from a route relation');
+    assert.deepEqual(area(zurs).runs.map((r) => r.n), ['Madloch']);
+    assert.deepEqual(area(zurs).lifts.map((l) => l.n), ['Seekopf']);
+    assert.deepEqual(area(byName['Split Mountain']).runs.map((r) => r.n), ['Split Run'], 'multipolygon outline assembled from two ways');
+    assert.deepEqual(area(byName['Duplicate Peak']).runs.map((r) => r.n).sort(), ['Dup One', 'Dup Two']);
+    assert.match(fs.readFileSync(path.join(tmp, 'out/LICENSE.txt'), 'utf8'), /opensnowmap\.org/);
+  } finally {
+    s.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('OpenSnowMap reader handles uncompressed XML read in tiny chunks', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fls-osm-'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/synthetic-area.json'), 'utf8'));
+  writeOsmPistesFixture(path.join(tmp, 'src'), fixture, { gzip: false });
+  const s = await fileServer(path.join(tmp, 'src'));
+  try {
+    await promisify(execFile)(
+      'node',
+      [path.join(ROOT, 'scripts/build-data.mjs'), '--source', 'opensnowmap', '--opensnowmap-url', `${s.base}/files/planet_pistes.osm`, '--admin-url', 'none', '--download-dir', path.join(tmp, 'dl'), '--out', path.join(tmp, 'out')],
+      { env: { ...process.env, BUILD_DATA_CHUNK: '61' } }
+    );
+    const { at, byName } = readIndex(path.join(tmp, 'out'));
+    assert.equal(byName['Test Peak'][at.runs], fixture.features.runs.length);
+    assert.equal(byName['Test Peak'][at.cc], '', 'no places without the admin file');
+    assert.equal(Object.keys(byName).length, 4);
+  } finally {
+    s.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

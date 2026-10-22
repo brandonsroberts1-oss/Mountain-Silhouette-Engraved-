@@ -1,7 +1,7 @@
 // Data facade: search + load a ski area with graceful fallbacks.
 
 import { searchSkiAreas, getSkiArea, fetchAreaFeatures, areaBbox } from './openskimap.js';
-import { searchLocal, fetchLocalArea } from './local.js';
+import { searchLocal, fetchLocalArea, bundledInfo } from './local.js';
 import { polygonRings, bboxAround } from './geo.js';
 import { fetchOverpassFeatures, nominatimSearch } from './overpass.js';
 import { buildModel, attachElevation, computeStats } from './model.js';
@@ -10,7 +10,7 @@ import { loadDem } from './dem.js';
 export async function search(query, { signal } = {}) {
   // Bundled data first: same-origin, so it works on any network.
   const local = await searchLocal(query, { signal });
-  if (local && local.length) return { results: local, source: 'bundled OpenSkiMap data' };
+  if (local && local.length) return { results: local, source: `bundled ${bundledInfo().sourceName} data` };
 
   let primaryError = null;
   try {
