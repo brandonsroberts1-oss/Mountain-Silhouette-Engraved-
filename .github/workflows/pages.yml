@@ -89,6 +89,9 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+      - name: Data summary
+        if: steps.assemble.outputs.data == 'yes'
+        run: node scripts/data-summary.mjs _site/data "Jackson Hole,Mount Snow,Vail,Whistler,Zermatt,Niseko"
 
   deploy:
     needs: build

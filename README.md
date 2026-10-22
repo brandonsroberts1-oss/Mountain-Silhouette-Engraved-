@@ -172,6 +172,7 @@ js/data/                       bundled data (local.js), OpenSkiMap API, Overpass
 scripts/build-data.mjs         trail data build → data/index.json + data/areas/*.json
 scripts/data/                  readers: OpenSkiMap GeoJSON, OpenSnowMap OSM XML (fallback),
                                Natural Earth regions; downloads with retries
+scripts/data-summary.mjs       prints the source, size and a few known resorts of a data build
 .github/workflows/pages.yml    builds the data (weekly) and deploys app + data to GitHub Pages
 js/render/scene.js             3D oblique projection, ray-marched hidden lines,
                                floating-horizon ridgelines/outline, plan view + contours
