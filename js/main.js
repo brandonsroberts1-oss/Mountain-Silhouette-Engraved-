@@ -12,7 +12,7 @@ import {
 } from './format.js';
 
 // Shown in the footer so a stale cached copy is easy to spot.
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
 const STORAGE_KEY = 'fall-line-studio:v2';
@@ -32,7 +32,7 @@ const DEFAULTS = {
   showSerial: true,
   coordStyle: 'decimal',
   coordSource: 'center',
-  export: { lineWeight: 0.2, colorMode: 'layers', layerByDifficulty: false, includeCut: false },
+  export: { lineWidth: 0.25, colorMode: 'layers', layerByDifficulty: false, includeCut: false },
   material: 'slate',
 };
 
@@ -211,6 +211,7 @@ async function renderNow() {
       border: settings.text.border,
       dividers: settings.text.dividers,
       cornerRadius: 3,
+      lineWidth: settings.export.lineWidth,
     },
     artOptions: {
       zoom: settings.art.zoom,
@@ -227,24 +228,18 @@ async function renderNow() {
   });
   lastDoc = doc;
   const preview = buildSvg(doc, {
-    mode: settings.material === 'layers' ? 'export' : 'preview',
+    mode: 'preview',
     material: settings.material,
     colorMode: settings.export.colorMode,
-    lineWeight: Math.max(settings.export.lineWeight, 0.15),
     includeCut: settings.export.includeCut || settings.material === 'layers',
     blank: doc.cut,
     title: current.texts.title,
   });
-  $('preview').innerHTML = settings.material === 'layers' ? withPaper(preview, doc) : preview;
+  $('preview').innerHTML = preview;
   $('btn-export-svg').disabled = false;
   $('btn-export-png').disabled = false;
   renderLegend(doc);
   save();
-}
-
-/** White paper behind the layer-colour view so it reads like a cutting mat. */
-function withPaper(svg, doc) {
-  return svg.replace(/(<svg[^>]*>)/, `$1<path d="${doc.cut}" fill="#ffffff"/>`);
 }
 
 function renderLegend(doc) {
@@ -278,22 +273,28 @@ function fileBase() {
   return `${slugify(current.texts.title || current.area.name)}-${tpl.id}-${Math.round(size.w)}x${Math.round(size.h)}mm`;
 }
 
-function exportSvg() {
+async function exportSvg() {
   if (!lastDoc) return;
-  const svg = buildSvg(lastDoc, {
-    mode: 'export',
-    colorMode: settings.export.colorMode,
-    lineWeight: settings.export.lineWeight,
-    includeCut: settings.export.includeCut,
-    title: current.texts.title,
-  });
-  download(new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n${svg}`], { type: 'image/svg+xml' }), `${fileBase()}.svg`);
+  // Outlining every line can take a moment on dense designs.
+  setBusy('Preparing engrave-ready SVG…');
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const svg = buildSvg(lastDoc, {
+      mode: 'export',
+      colorMode: settings.export.colorMode,
+      includeCut: settings.export.includeCut,
+      title: current.texts.title,
+    });
+    download(new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n${svg}`], { type: 'image/svg+xml' }), `${fileBase()}.svg`);
+  } finally {
+    setBusy('');
+  }
 }
 
 async function exportPng() {
   if (!lastDoc) return;
   const material = settings.material === 'layers' ? 'slate' : settings.material;
-  const svg = buildSvg(lastDoc, { mode: 'preview', material, lineWeight: Math.max(settings.export.lineWeight, 0.15), blank: lastDoc.cut });
+  const svg = buildSvg(lastDoc, { mode: 'preview', material, blank: lastDoc.cut });
   const pxPerMm = 2400 / Math.max(lastDoc.W, lastDoc.H);
   const w = Math.round(lastDoc.W * pxPerMm);
   const h = Math.round(lastDoc.H * pxPerMm);
@@ -508,7 +509,7 @@ const BINDINGS = [
   ['showSerial', () => settings.showSerial, (v) => (settings.showSerial = v), 'check'],
   ['coordStyle', () => settings.coordStyle, (v) => (settings.coordStyle = v), 'select'],
   ['coordSource', () => settings.coordSource, (v) => (settings.coordSource = v), 'select'],
-  ['lineWeight', () => settings.export.lineWeight, (v) => (settings.export.lineWeight = clamp(+v || 0.2, 0.05, 1)), 'number'],
+  ['lineWidth', () => settings.export.lineWidth, (v) => (settings.export.lineWidth = clamp(+v || 0.25, 0.12, 1)), 'number'],
   ['colorMode', () => settings.export.colorMode, (v) => (settings.export.colorMode = v), 'select'],
   ['layerByDifficulty', () => settings.export.layerByDifficulty, (v) => (settings.export.layerByDifficulty = v), 'check'],
   ['includeCut', () => settings.export.includeCut, (v) => (settings.export.includeCut = v), 'check'],
@@ -601,7 +602,7 @@ function wireControls() {
     runSearch($('search-input').value);
   });
 
-  $('btn-export-svg').addEventListener('click', exportSvg);
+  $('btn-export-svg').addEventListener('click', () => exportSvg().catch((err) => setStatus(`SVG export failed: ${err.message}`, true)));
   $('btn-export-png').addEventListener('click', () => exportPng().catch((err) => setStatus(`PNG export failed: ${err.message}`, true)));
 }
 

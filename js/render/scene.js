@@ -184,6 +184,7 @@ function build3d(model, dem, view) {
     : [];
 
   let terrain = [];
+  let terrainSpacing = 0;
   if (view.terrain === 'ridges' || view.terrain === 'outline') {
     // Floating horizon: walk depth slices front to back; each slice is only
     // visible where it rises above everything drawn in front of it.
@@ -220,6 +221,7 @@ function build3d(model, dem, view) {
           if (vis) {
             if (!cur) {
               cur = [];
+              cur.level = i; // slice index, so layout can thin slices for engraving
               terrain.push(cur);
               if (j > 0) cur.push(crossing(us, vs, H, j));
             }
@@ -249,10 +251,12 @@ function build3d(model, dem, view) {
       }
       terrain = terrain.filter((l) => l.length > M * 0.04).map((l) => chaikin(l, 2));
     }
-    terrain = terrain.filter((l) => l.length >= 2).map((l) => simplify(l, (u1 - u0) * 0.0004));
+    terrain = terrain.filter((l) => l.length >= 2).map((l) => Object.assign(simplify(l, (u1 - u0) * 0.0004), { level: l.level }));
+    // Nominal gap between neighbouring ridgelines (on flat ground), in scene units.
+    if (view.terrain === 'ridges') terrainSpacing = ((d1 - d0) / (N - 1)) * sinT;
   }
 
-  return finish(trails, lifts, terrain, true);
+  return finish(trails, lifts, terrain, true, terrainSpacing);
 }
 
 // Point where the slice crosses the horizon between columns j-1 and j.
@@ -280,25 +284,32 @@ function buildMap(model, dem, view) {
     : [];
 
   let terrain = [];
+  let terrainSpacing = 0;
   if (view.terrain === 'contours') {
     const range = Math.max(50, model.topElevation - model.baseElevation);
     const interval = view.contourInterval > 0 ? view.contourInterval : niceInterval(range * 1.4, 16);
     const start = Math.ceil(dem.min / interval) * interval;
+    // Every contour index is "every k-th line"; anchor on a round elevation so
+    // thinning keeps e.g. every 100 m rather than an arbitrary subset.
+    const base = Math.ceil(dem.min / (interval * 12)) * interval * 12;
     for (let level = start; level <= dem.max; level += interval) {
+      const idx = Math.round((level - base) / interval);
       for (const line of isolines(dem.data, dem.nx, dem.ny, level)) {
         const local = line.map(([i, j]) => [dem.x0 + i * dem.cell, dem.y0 + j * dem.cell]);
-        terrain.push(simplify(chaikin(local, 1), dem.cell * 0.15).map(rot));
+        terrain.push(Object.assign(simplify(chaikin(local, 1), dem.cell * 0.15).map(rot), { level: ((idx % 12) + 12) % 12 }));
       }
     }
+    // Typical gap between contours on a steep (~27°) ski slope, in metres.
+    terrainSpacing = interval / 0.5;
   }
-  return finish(trails, lifts, terrain);
+  return finish(trails, lifts, terrain, false, terrainSpacing);
 }
 
-function finish(trails, lifts, terrain, terrainInFocus = false) {
+function finish(trails, lifts, terrain, terrainInFocus = false, terrainSpacing = 0) {
   const focusLines = [...trails.flatMap((t) => t.lines), ...lifts.flatMap((l) => l.lines)];
   if (terrainInFocus) focusLines.push(...terrain);
   const focus = focusLines.length ? bounds(focusLines) : bounds(terrain);
-  return { trails, lifts, terrain, focus };
+  return { trails, lifts, terrain, terrainSpacing, focus };
 }
 
 /**

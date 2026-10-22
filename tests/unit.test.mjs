@@ -222,12 +222,15 @@ test('every template composes into a laser-safe SVG', async () => {
     });
     assert.equal(content.stats.find((s) => s.id === 'trails').value, '86');
     const doc = composeDesign({ template: tpl, W: size.w, H: size.h, scene, content, fonts, options: { titleScale: 1, smallCaps: true, border: true, dividers: true, cornerRadius: 3 }, artOptions: { highlight: 'B' } });
-    const svg = buildSvg(doc, { mode: 'export', colorMode: 'layers', lineWeight: 0.2, includeCut: true });
+    const svg = buildSvg(doc, { mode: 'export', colorMode: 'layers', includeCut: true });
     assert.match(svg, new RegExp(`width="${size.w}mm" height="${size.h}mm"`), tpl.id);
     assert.doesNotMatch(svg, /<text|<use|clipPath|<mask|dasharray|<style|NaN|undefined|Infinity/, tpl.id);
-    assert.match(svg, /<g id="trails"/, tpl.id);
+    assert.match(svg, /<g id="trails" fill="#0000FF" stroke="none"/, tpl.id);
     assert.match(svg, /<g id="highlight"/, tpl.id);
     assert.match(svg, /<g id="cut"/, tpl.id);
+    // Everything except the optional cut guide is a filled shape: no hairline scores.
+    const strokeGroups = [...svg.matchAll(/<g id="([^"]+)"[^>]*stroke="(?!none)[^"]+"/g)].map((m) => m[1]);
+    assert.deepEqual(strokeGroups, ['cut'], tpl.id);
     // Everything must sit on the blank.
     const nums = [...svg.matchAll(/d="([^"]+)"/g)].flatMap((m) => (m[1].match(/-?\d+(\.\d+)?/g) || []).map(Number));
     assert.ok(Math.min(...nums) > -1 && Math.max(...nums) < Math.max(size.w, size.h) + 1, tpl.id);
@@ -357,4 +360,64 @@ test('bold trail style engraves trails as filled shapes', async () => {
   placeArt(line, scene, { x: 5, y: 5, w: 90, h: 60 }, null, { trailStyle: 'line' });
   assert.ok(line.items.some((i) => i.layer === 'trails' && i.kind === 'stroke'));
   assert.ok(!line.items.some((i) => i.layer === 'trails' && i.kind === 'fill'));
+});
+
+test('every line is engraved at its width (outlined, not scored)', async () => {
+  const { strokeToFill, flattenPath } = await import('../js/render/outline.js');
+  const d = strokeToFill('M0 0L10 0', 0.3);
+  const pts = flattenPath(d).flatMap((s) => s.pts);
+  const ys = pts.map((p) => p[1]);
+  assert.ok(Math.abs(Math.max(...ys) - 0.15) < 0.01 && Math.abs(Math.min(...ys) + 0.15) < 0.01, 'band is 0.3 mm wide');
+  // A closed ring outlines to an outer and an inner contour.
+  assert.equal(flattenPath(strokeToFill('M0 5A5 5 0 1 0 10 5A5 5 0 1 0 0 5Z', 0.3)).length, 2);
+  // Overlapping lines merge into one shape (no double burn).
+  assert.equal(flattenPath(strokeToFill('M0 0L10 0M5 -1L5 1', 0.3)).length, 1);
+});
+
+test('compose gives every line a physical width from the line-width setting', async () => {
+  const model = coneModel();
+  const dem = coneFor(model);
+  attachElevation(model, dem);
+  const stats = computeStats({ center: model.center, statistics: null }, model, dem);
+  const fonts = {
+    title: await loadFont('cinzel', fontLoader),
+    body: await loadFont('montserrat', fontLoader),
+    bold: await loadFont('montserrat-bold', fontLoader),
+    script: await loadFont('great-vibes', fontLoader),
+  };
+  const tpl = TEMPLATES.find((t) => t.id === 'badge');
+  const scene = buildScene(model, dem, { ...DEFAULT_VIEW, azimuth: 270, terrain: 'ridges' });
+  const content = buildContent(stats, { texts: { title: 'Cone' }, stats: { summit: true }, overrides: {}, units: 'ft', convention: 'north_america' });
+  const doc = composeDesign({ template: tpl, W: 101.6, H: 101.6, scene, content, fonts, options: { titleScale: 1, border: true, lineWidth: 0.4 } });
+  const strokes = doc.items.filter((i) => i.kind === 'stroke');
+  assert.ok(strokes.length > 0);
+  assert.ok(strokes.every((i) => i.width >= 0.3), 'no line thinner than 0.3 mm at a 0.4 mm setting (terrain is 0.8×)');
+  assert.ok(strokes.some((i) => i.layer === 'frame' && Math.abs(i.width - 0.4) < 1e-9));
+});
+
+test('exported art layers never overlap (no spot is burned twice)', async () => {
+  const { fillPaths, clip, area } = await import('../js/render/outline.js');
+  const { engraveDoc } = await import('../js/render/svg.js');
+  const model = coneModel();
+  const dem = coneFor(model);
+  attachElevation(model, dem);
+  const stats = computeStats({ center: model.center, statistics: null }, model, dem);
+  const fonts = {
+    title: await loadFont('cinzel', fontLoader),
+    body: await loadFont('montserrat', fontLoader),
+    bold: await loadFont('montserrat-bold', fontLoader),
+    script: await loadFont('great-vibes', fontLoader),
+  };
+  const tpl = TEMPLATES.find((t) => t.id === 'summit');
+  const scene = buildScene(model, dem, { ...DEFAULT_VIEW, azimuth: 270, terrain: 'ridges' });
+  const content = buildContent(stats, { texts: { title: 'Cone' }, stats: { summit: true }, overrides: {}, units: 'ft', convention: 'north_america' });
+  const doc = composeDesign({ template: tpl, W: 101.6, H: 101.6, scene, content, fonts, options: { titleScale: 1, border: true }, artOptions: { highlight: 'B', knockout: false } });
+  const layers = engraveDoc(doc).filter((e) => e.layer !== 'text');
+  assert.ok(layers.some((l) => l.layer === 'lifts') && layers.some((l) => l.layer === 'highlight'));
+  for (let i = 0; i < layers.length; i++) {
+    for (let j = i + 1; j < layers.length; j++) {
+      const overlap = Math.abs(area(clip('intersection', fillPaths(layers[i].d), fillPaths(layers[j].d))));
+      assert.ok(overlap < 0.01, `${layers[i].layer} overlaps ${layers[j].layer} by ${overlap.toFixed(3)} mm²`);
+    }
+  }
 });

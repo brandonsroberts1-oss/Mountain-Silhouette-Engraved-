@@ -159,14 +159,16 @@ function summit(doc, c, f, o, art) {
     const iconS = u * 0.062 * k;
     const valS = u * (n > 3 ? 0.04 : 0.046) * k;
     const labS = u * 0.022 * k;
+    // Text must clear the engraved dividers between columns.
+    const textW = Math.min(colW * 0.9, colW - (o.dividers ? (o.lineWidth ?? 0.25) + 1 : 0));
     const labY = y;
     const valY = labY - labS * 1.7;
     const iconY = valY - valS * 1.0 - iconS * 0.62;
     c.stats.forEach((st, i) => {
       const cx = m + colW * (i + 0.5);
       if (st.icon) doc.fill('text', st.icon(cx, iconY, iconS));
-      valueWithUnit(doc, f, st, cx, valY, valS, colW * 0.9);
-      const ls = fitSize(f.body, st.label, colW * 0.92, labS, { tracking: 0.16, caps: true });
+      valueWithUnit(doc, f, st, cx, valY, valS, textW);
+      const ls = fitSize(f.body, st.label, textW, labS, { tracking: 0.16, caps: true });
       T(doc, f.body, st.label, { x: cx, y: labY, size: ls, tracking: 0.16, caps: true });
       if (i > 0 && o.dividers) {
         const x = m + colW * i;

@@ -181,6 +181,17 @@ await step('exported SVG is laser friendly', async () => {
   if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, 'export.svg'));
 });
 
+await step('every layer engraves (no score lines) and line width is adjustable', async () => {
+  const legend = await page.textContent('#legend');
+  assert.match(legend, /Engrave/);
+  assert.doesNotMatch(legend, /Score/);
+  await page.fill('#lineWidth', '0.4');
+  await page.dispatchEvent('#lineWidth', 'input');
+  await page.waitForTimeout(300);
+  const widths = await page.evaluate(() => window.__fallLine.doc.items.filter((i) => i.layer === 'frame').map((i) => i.width));
+  assert.ok(widths.length && widths.every((w) => Math.abs(w - 0.4) < 1e-9), `frame widths ${widths}`);
+});
+
 await step('PNG mockup downloads', async () => {
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-png')]);
   const buf = fs.readFileSync(await download.path());

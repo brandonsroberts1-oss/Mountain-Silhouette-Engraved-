@@ -18,12 +18,12 @@ real elevation model, and are drawn in one of two views:
 
 | | |
 |---|---|
-| **Finished-looking trails** | OSM run segments are joined into continuous trails and smoothed to remove GPS jitter. Flicker where trails pass behind ridges is cleaned up. Trails are drawn as **bold tapered strokes** (filled shapes, engraved solid) or as **fine score lines**, and terrain lines stop short of each trail so it stands out. |
+| **Finished-looking trails** | OSM run segments are joined into continuous trails and smoothed to remove GPS jitter. Flicker where trails pass behind ridges is cleaned up. Trails are drawn as **tapered strokes** or **even-width lines**, and terrain lines stop short of each trail so it stands out. |
 | **Search** | Ski areas worldwide via OpenSkiMap. Falls back to OpenStreetMap Nominatim + Overpass if needed. |
 | **Stats** | Summit and base elevation, vertical drop, trail count with a difficulty breakdown, toughest run, lift count, location, and coordinates (centre, summit or base; decimal or DMS). Every value can be overridden. |
 | **Templates** | **Summit** (art over title + icon stats row), **Topo** (contour map, checkered map border, title cartouche, north arrow), **Badge** (round seal with text on arcs), **Lift Ticket** (tear-off stub, dotted stat leaders, serial number made from the coordinates). |
 | **Personalisation** | Title, location line, a script-font message ("Our first run together · 2026"), and a **favourite run** drawn as a ribbon with a star or heart marker. |
-| **Laser export** | True-size mm SVG with only `<g>` and `<path>`: no text, fonts, masks, clip paths or dash arrays. Text is converted to outlines. Each operation gets its own colour so it becomes its own layer. Optional per-difficulty trail layers and a red outline of the blank. |
+| **Laser export** | True-size mm SVG made only of filled `<path>`s: every line is outlined to its engraved width (no thin score lines), text is converted to outlines, and overlaps are merged so nothing burns twice. There are no fonts, masks, clip paths or dash arrays. Each layer has its own colour so it can get its own power and speed. Optional per-difficulty trail layers and a red outline of the blank. |
 | **Mockups** | PNG export of the material preview, for product listings. |
 
 ### Positioning (why this design)
@@ -48,28 +48,39 @@ Plan-view maps and contour coasters are common. This app leans into what is not:
 
 ## Using it with xTool Studio
 
+**Everything engraves.** There are no hairline score lines. Every line in a
+design is exported as a filled shape of real width: terrain ridgelines and
+contours, lifts, borders, rings, rules and trails. xTool fills it like text,
+so lines come out solid and consistent instead of a single faint pass. Shapes
+are merged so nothing overlaps. Where layers cross (e.g. a lift over a trail),
+the upper one is cut out of the lower, so no spot is burned twice.
+
 1. Export with **Download SVG** and import it into xTool Studio. It keeps its
    physical size, e.g. 101.6 × 101.6 mm for a 4″ coaster.
-2. Layers are colour-coded:
+2. Set every colour layer to **Engrave**. Layers are colour-coded so each can
+   have its own power and speed:
 
-   | Colour | Content | Suggested processing |
+   | Colour | Content | Suggestion |
    |---|---|---|
-   | Black fill | Text, icons, dots, blocks | Engrave (fill) |
-   | Blue `#0000FF` | Trails | Engrave (fill) with *Bold engraved strokes*; Score with *Fine score lines* |
-   | Magenta `#FF00FF` | Terrain lines | Score at lower power, so it reads lighter |
-   | Cyan `#00A0C8` | Lifts | Score |
-   | Orange `#FF7F00` | Favourite run | Score, or higher power for emphasis |
-   | Teal `#008080` | Frames, rules, rings | Score |
-   | Red `#FF0000` | Blank outline (optional) | Cut, or use only for framing/alignment and set it not to output |
+   | Black | Text, icons, dots, map-border blocks | Engrave |
+   | Blue `#0000FF` | Trails | Engrave |
+   | Magenta `#FF00FF` | Terrain lines | Engrave at lower power for a softer look |
+   | Cyan `#00A0C8` | Lifts | Engrave |
+   | Orange `#FF7F00` | Favourite run | Engrave, or higher power for emphasis |
+   | Teal `#008080` | Frames, rules, rings | Engrave |
+   | Red `#FF0000` | Blank outline (optional, a thin line) | Cut, or use only for framing/alignment and set it not to output |
 
-   Choose **All black** under *Colours* if you prefer to assign processing per object.
-3. Run a material test grid first. Slate, wood and leather vary a lot between
-   machines and batches. Score lines on slate turn light grey and engraved fills
-   turn pale.
-4. *Trail width* (bold style) is a real physical width: the trails are filled
-   shapes, so they engrave as solid lines of that width. 0.35–0.5 mm reads well
-   on a 4″ coaster. *Line weight* only sets the preview/SVG stroke width of
-   score lines; a score follows the path centreline.
+   Choose **All black** under *Colours* to put everything on one layer.
+3. Line widths are real physical widths:
+   - **Line width** (default 0.25 mm) sets borders, rules, rings and lifts.
+     Terrain lines are 0.8× this.
+   - **Trail width** (default 0.4 mm) sets the trails.
+
+   0.2–0.5 mm engraves well on slate, wood and leather. Ridgelines and contour
+   lines are thinned automatically at small sizes so neighbouring lines stay at
+   least ~0.6 mm apart and don't fuse together.
+4. Run a material test grid first. Slate, wood and leather vary a lot between
+   machines and batches. On slate, engraved areas turn pale grey-white.
 
 ## Running locally
 
@@ -123,7 +134,9 @@ js/render/geometry.js          clipping, simplification, smoothing, dashes, ribb
 js/render/text.js              opentype.js text → outlined paths (straight and on arcs)
 js/render/templates.js         the four layouts
 js/render/svg.js               preview (material simulation) and laser export
+js/render/outline.js           lines → engraved outlines, merging and layer cut-outs (Clipper)
 vendor/opentype.module.js      opentype.js 1.3.4 (MIT)
+vendor/clipper.module.js       Clipper 6.4.2 polygon offsetting/booleans (Boost licence)
 fonts/                         Cinzel, Playfair Display, Bebas Neue, Josefin Sans,
                                Alfa Slab One, Oswald, Montserrat, Great Vibes (OFL)
 ```

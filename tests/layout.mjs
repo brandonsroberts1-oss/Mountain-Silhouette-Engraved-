@@ -8,6 +8,8 @@
 //   - everything lies on the physical blank (inside the cut outline)
 //   - content stays inside the design's safe area (e.g. the ticket border)
 //   - text, icons and art never touch a frame line (border, rings, rules)
+//   - text and icons never overlap each other
+// Sampling uses the engrave-ready export geometry (lines outlined to width).
 // No network access is needed: the terrain is a synthetic mountain.
 
 import http from 'node:http';
@@ -54,7 +56,7 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
   const { buildModel, attachElevation, computeStats } = await import('/js/data/model.js');
   const { composeDesign } = await import('/js/render/compose.js');
   const { TEMPLATES } = await import('/js/render/templates.js');
-  const { buildSvg } = await import('/js/render/svg.js');
+  const { buildSvg, engraveDoc } = await import('/js/render/svg.js');
   const { buildContent } = await import('/js/content.js');
   const { loadFont, browserLoader } = await import('/js/fonts.js');
 
@@ -147,7 +149,9 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
           });
           designs++;
           const where = `${tpl.id} ${size.id} ${size.w}x${size.h} ${v.id}${border ? '' : ' no-border'}`;
-          host.innerHTML = buildSvg(doc, { mode: 'export', lineWeight: 0.2, includeCut: true });
+          host.innerHTML = buildSvg(doc, { mode: 'export', includeCut: true });
+          // Check what will actually be engraved: lines outlined to their width.
+          const engraved = engraveDoc(doc);
           const svg = host.querySelector('svg');
           const mkPath = (d, sw) => {
             const p = document.createElementNS(NS, 'path');
@@ -160,9 +164,9 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
           };
           const cut = mkPath(doc.cut, 0);
           const safe = doc.safe ? mkPath(doc.safe, 0) : null;
-          // Frame lines widened to the clearance we require around them (0.25 mm each side).
+          // Frame lines widened by the clearance we require around them (0.25 mm each side).
           const frames = doc.items.filter((i) => i.layer === 'frame').map((i) => {
-            const p = mkPath(i.d, 0.5);
+            const p = mkPath(i.d, (i.width || 0) + 0.5);
             p.setAttribute('stroke', '#000');
             return p;
           });
@@ -176,7 +180,7 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
           // Sample each subpath separately: getPointAtLength walks the path from
           // its start, so long multi-glyph paths would be quadratic.
           const probe = mkPath('M0 0', 0);
-          for (const it of doc.items) {
+          for (const it of engraved) {
             for (const sub of it.d.split(/(?=M)/)) {
               probe.setAttribute('d', sub);
               const len = probe.getTotalLength();
@@ -191,7 +195,7 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
             }
           }
           // Text and icons must not overlap or crowd each other (< 0.2 mm apart).
-          const marks = doc.items
+          const marks = engraved
             .filter((it) => it.layer === 'text' && !it.meta?.touchesFrame)
             .map((it) => {
               const p = mkPath(it.d, 0.4);
@@ -227,7 +231,7 @@ const runTemplate = (tplId) => page.evaluate(async ({ wantShots, tplId }) => {
             }
           }
           if (wantShots && v.id !== 'plain' && border) {
-            shots.push({ name: `${tpl.id}-${size.id}-${v.id}`, svg: buildSvg(doc, { mode: 'preview', material: 'slate', lineWeight: 0.2, blank: doc.cut }) });
+            shots.push({ name: `${tpl.id}-${size.id}-${v.id}`, svg: buildSvg(doc, { mode: 'preview', material: 'slate', blank: doc.cut }) });
           }
         }
       }

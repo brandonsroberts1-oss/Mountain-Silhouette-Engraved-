@@ -84,11 +84,11 @@
         <div class="row">
           <label class="field">Trail style
             <select id="trailStyle">
-              <option value="bold">Bold engraved strokes</option>
-              <option value="line">Fine score lines</option>
+              <option value="bold">Tapered strokes</option>
+              <option value="line">Even-width lines</option>
             </select>
           </label>
-          <label class="field range only-bold">Trail width <output id="trailWidth-out"></output><input type="range" id="trailWidth" min="0.15" max="1" step="0.05" /></label>
+          <label class="field range">Trail width <output id="trailWidth-out"></output><input type="range" id="trailWidth" min="0.15" max="1" step="0.05" /></label>
         </div>
         <label class="field range">Trail smoothing <output id="smooth-out"></output><input type="range" id="smooth" min="0" max="3" step="1" /></label>
         <div class="checks">
@@ -174,7 +174,7 @@
       <section class="card" id="sec-export">
         <h2>6 · Laser export</h2>
         <div class="row">
-          <label class="field">Line weight (mm)<input type="number" id="lineWeight" min="0.05" max="1" step="0.05" /></label>
+          <label class="field">Line width (mm)<input type="number" id="lineWidth" min="0.12" max="1" step="0.05" /></label>
           <label class="field">Colours
             <select id="colorMode">
               <option value="layers">One colour per layer</option>
@@ -185,7 +185,7 @@
         <label class="check"><input type="checkbox" id="layerByDifficulty" /> Separate trail layers by difficulty</label>
         <label class="check"><input type="checkbox" id="includeCut" /> Include blank outline (red cut / framing guide)</label>
         <ul class="legend" id="legend"></ul>
-        <p class="hint">In xTool Studio, set <b>Score</b> for line layers and <b>Engrave</b> for the black text layer. Everything is exported as outlined paths at true size, so no fonts are needed.</p>
+        <p class="hint">Everything engraves: every line is exported as a filled shape of real width (no thin score lines), and text is outlined, so no fonts are needed. In xTool Studio set each colour layer to <b>Engrave</b>; give the terrain layer lower power for a softer look. <b>Line width</b> sets terrain, lift and border lines; trails use <b>Trail width</b>.</p>
       </section>
     </aside>
 

@@ -2,21 +2,24 @@
 //
 // Export rules for xTool Studio / laser software:
 //  - width/height in mm with a matching viewBox, so it imports at true size
-//  - only <g> and <path>; no <text>, <use>, clipPath, mask, CSS or dasharray
-//  - one colour per operation so each becomes its own layer
+//  - only <g> and filled <path>s; no <text>, <use>, clipPath, mask, CSS or
+//    dasharray, and no hairlines: every line is outlined to its engraved width
+//  - one colour per layer, so each can get its own power/speed
+
+import { strokePaths, fillPaths, clip, pathsToD } from './outline.js';
 
 export const LAYERS = [
-  { id: 'terrain', name: 'Terrain lines', op: 'Score (light)', color: '#FF00FF', kind: 'stroke' },
-  { id: 'trails', name: 'Ski trails', op: 'Score', color: '#0000FF', kind: 'stroke' },
-  { id: 'trails-easy', name: 'Trails · easy', op: 'Score', color: '#00A651', kind: 'stroke' },
-  { id: 'trails-intermediate', name: 'Trails · intermediate', op: 'Score', color: '#0072FF', kind: 'stroke' },
-  { id: 'trails-advanced', name: 'Trails · advanced', op: 'Score', color: '#5B2C83', kind: 'stroke' },
-  { id: 'trails-expert', name: 'Trails · expert', op: 'Score', color: '#E87500', kind: 'stroke' },
-  { id: 'trails-other', name: 'Trails · unrated', op: 'Score', color: '#0000FF', kind: 'stroke' },
-  { id: 'lifts', name: 'Lifts', op: 'Score', color: '#00A0C8', kind: 'stroke' },
-  { id: 'highlight', name: 'Favourite run', op: 'Score', color: '#FF7F00', kind: 'stroke' },
-  { id: 'frame', name: 'Frames & rules', op: 'Score', color: '#008080', kind: 'stroke' },
-  { id: 'text', name: 'Text & icons', op: 'Engrave (fill)', color: '#000000', kind: 'fill' },
+  { id: 'terrain', name: 'Terrain lines', op: 'Engrave · lower power', color: '#FF00FF', kind: 'stroke' },
+  { id: 'trails', name: 'Ski trails', op: 'Engrave', color: '#0000FF', kind: 'stroke' },
+  { id: 'trails-easy', name: 'Trails · easy', op: 'Engrave', color: '#00A651', kind: 'stroke' },
+  { id: 'trails-intermediate', name: 'Trails · intermediate', op: 'Engrave', color: '#0072FF', kind: 'stroke' },
+  { id: 'trails-advanced', name: 'Trails · advanced', op: 'Engrave', color: '#5B2C83', kind: 'stroke' },
+  { id: 'trails-expert', name: 'Trails · expert', op: 'Engrave', color: '#E87500', kind: 'stroke' },
+  { id: 'trails-other', name: 'Trails · unrated', op: 'Engrave', color: '#0000FF', kind: 'stroke' },
+  { id: 'lifts', name: 'Lifts', op: 'Engrave', color: '#00A0C8', kind: 'stroke' },
+  { id: 'highlight', name: 'Favourite run', op: 'Engrave', color: '#FF7F00', kind: 'stroke' },
+  { id: 'frame', name: 'Frames & rules', op: 'Engrave', color: '#008080', kind: 'stroke' },
+  { id: 'text', name: 'Text & icons', op: 'Engrave', color: '#000000', kind: 'fill' },
   { id: 'cut', name: 'Blank outline', op: 'Cut / frame guide', color: '#FF0000', kind: 'stroke' },
 ];
 
@@ -45,36 +48,51 @@ function layerColor(id, colorMode) {
   return (LAYERS.find((l) => l.id === id) || LAYERS[1]).color;
 }
 
-/**
- * Layers present in a doc, in canonical order, with the operation that suits
- * them: filled shapes engrave, open lines score.
- */
+/** Layers present in a doc, in canonical order (every layer engraves). */
 export function usedLayers(doc, includeCut) {
-  const kinds = new Map();
-  for (const it of doc.items) {
-    if (!kinds.has(it.layer)) kinds.set(it.layer, new Set());
-    kinds.get(it.layer).add(it.kind);
+  const ids = new Set(doc.items.map((it) => it.layer));
+  return LAYERS.filter((l) => (l.id === 'cut' ? includeCut && doc.cut : ids.has(l.id)));
+}
+
+// Art layers from top to bottom. Where they overlap, the upper layer wins and
+// is cut out of the ones beneath, so no spot is burned twice.
+const ART_STACK = ['highlight', 'trails-expert', 'trails-advanced', 'trails-intermediate', 'trails-easy', 'trails-other', 'trails', 'lifts', 'terrain'];
+
+/**
+ * Engrave-ready geometry: every line outlined at its width, and shapes merged
+ * so nothing overlaps (no double burns, same result under any fill rule).
+ * Art and frame layers merge into one shape per layer; text stays one shape
+ * per text item so it can still be moved individually in xTool Studio.
+ */
+export function engraveDoc(doc) {
+  const shapes = (it) => (it.kind === 'stroke' ? strokePaths(it.d, it.width) : fillPaths(it.d));
+  const layers = grouped(doc);
+  const merged = new Map();
+  let occupied = [];
+  for (const id of ART_STACK) {
+    if (!layers.has(id)) continue;
+    let paths = clip('union', layers.get(id).flatMap(shapes));
+    if (occupied.length) paths = clip('difference', paths, occupied);
+    merged.set(id, paths);
+    occupied = clip('union', occupied.concat(paths));
   }
   const out = [];
-  for (const l of LAYERS) {
-    if (l.id === 'cut') {
-      if (includeCut && doc.cut) out.push(l);
-      continue;
+  for (const [layer, items] of layers) {
+    if (layer === 'text') {
+      for (const it of items) out.push({ layer, d: pathsToD(clip('union', shapes(it))), meta: it.meta });
+    } else {
+      out.push({ layer, d: pathsToD(merged.get(layer) || clip('union', items.flatMap(shapes))) });
     }
-    const k = kinds.get(l.id);
-    if (!k) continue;
-    const op = k.has('fill') && k.has('stroke') ? 'Engrave + score' : k.has('fill') ? 'Engrave (fill)' : l.op;
-    out.push({ ...l, op });
   }
-  return out;
+  return out.filter((e) => e.d);
 }
 
 /**
  * opts: { mode: 'export' | 'preview', colorMode: 'layers' | 'mono',
- *         material, lineWeight (mm), includeCut, title }
+ *         material, includeCut, title, blank }
  */
 export function buildSvg(doc, opts) {
-  const { mode = 'export', colorMode = 'layers', material = 'slate', lineWeight = 0.2, includeCut = false } = opts;
+  const { mode = 'export', colorMode = 'layers', material = 'slate', includeCut = false } = opts;
   const W = +doc.W.toFixed(3);
   const H = +doc.H.toFixed(3);
   const mat = MATERIALS[material] || MATERIALS.slate;
@@ -88,29 +106,29 @@ export function buildSvg(doc, opts) {
   if (opts.title) out.push(`<title>${esc(opts.title)}</title>`);
 
   if (preview) {
+    // Lines are drawn at their engraved width (round ends/joins), which looks
+    // exactly like the outlined export but renders much faster.
     out.push(previewBackground(doc, mat, opts.blank));
-  }
-
-  for (const [id, items] of grouped(doc)) {
-    const color = ink(id);
-    const fills = items.filter((i) => i.kind === 'fill');
-    const strokes = items.filter((i) => i.kind === 'stroke');
-    if (fills.length) {
-      out.push(`<g id="${id}" fill="${color}" stroke="none">`);
-      for (const it of fills) out.push(`<path d="${it.d}"/>`);
-      out.push('</g>');
-    }
-    if (strokes.length) {
-      const gid = fills.length ? `${id}-lines` : id;
-      const sw = +(lineWeight * (strokes[0].weight || 1)).toFixed(3);
-      const extra = preview && id === 'terrain' && mat.ink ? ' stroke-opacity="0.72"' : '';
-      out.push(`<g id="${gid}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"${extra}>`);
-      for (const it of strokes) {
-        const w = +(lineWeight * (it.weight || 1)).toFixed(3);
-        out.push(w === sw ? `<path d="${it.d}"/>` : `<path d="${it.d}" stroke-width="${w}"/>`);
+    for (const [id, items] of grouped(doc)) {
+      const color = ink(id);
+      const fade = id === 'terrain' && mat.ink ? ' opacity="0.8"' : '';
+      out.push(`<g id="${id}" fill="${color}" stroke="${color}" stroke-linecap="round" stroke-linejoin="round"${fade}>`);
+      for (const it of items) {
+        out.push(it.kind === 'fill' ? `<path d="${it.d}" stroke="none"/>` : `<path d="${it.d}" fill="none" stroke-width="${+it.width.toFixed(3)}"/>`);
       }
       out.push('</g>');
     }
+  } else {
+    let current = null;
+    for (const e of engraveDoc(doc)) {
+      if (e.layer !== current) {
+        if (current) out.push('</g>');
+        out.push(`<g id="${e.layer}" fill="${ink(e.layer)}" stroke="none">`);
+        current = e.layer;
+      }
+      out.push(`<path d="${e.d}"/>`);
+    }
+    if (current) out.push('</g>');
   }
 
   if (includeCut && doc.cut) {
