@@ -103,14 +103,23 @@ the version shown at the bottom of the page.
 
 ## Data sources and accuracy
 
-- **Trails, lifts, ski areas, places:** © OpenStreetMap contributors, via the
-  [OpenSkiMap](https://openskimap.org) API
-  (`api.openskimap.org/search`, `/features.geojson`). If that's unavailable, it
-  falls back to the [Overpass API](https://overpass-api.de) and
-  [Nominatim](https://nominatim.org).
+- **Search:** the [OpenSkiMap](https://openskimap.org) search API
+  (`api.openskimap.org/search`), falling back to [Nominatim](https://nominatim.org).
+- **Trails and lifts** (© OpenStreetMap contributors). The app tries each
+  source in turn, so one slow or missing service doesn't block it:
+  1. the OpenSkiMap bbox API (`/features.geojson`), where deployed
+  2. OpenSkiMap's vector map tiles (`tiles.openskimap.org`, layers `runs`
+     and `lifts`), the same CDN data openskimap.org draws from
+  3. the [Overpass API](https://overpass-api.de). If the main server is
+     silent for a few seconds, mirrors are asked in parallel and the first
+     good answer wins.
 - **Elevation:** [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
   (Terrarium PNG, zoom ≤ 14). OpenSkiMap's own min/max elevation is used when
   available.
+
+Every request has a deadline. The loading pill shows elapsed time and a
+**Cancel** button. If every source fails, the app says which ones failed and
+why, instead of spinning.
 
 OpenStreetMap often splits a run into several segments and maps some glades or
 connectors without names. The trail count groups segments by name and only counts
@@ -126,7 +135,8 @@ js/main.js                     state, controls, preview, export
 js/content.js                  stats → printable content (icons, units, overrides)
 js/format.js                   units, coordinates, difficulty conventions (NA / EU / JP)
 js/fonts.js                    bundled OFL fonts (Fontsource WOFF, latin + latin-ext)
-js/data/                       OpenSkiMap, Overpass/Nominatim, terrain tiles, model + stats
+js/data/                       OpenSkiMap API + vector tiles (mvt.js decoder), Overpass/Nominatim,
+                               request deadlines (net.js), terrain tiles, model + stats
 js/render/scene.js             3D oblique projection, ray-marched hidden lines,
                                floating-horizon ridgelines/outline, plan view + contours
 js/render/contours.js          marching squares

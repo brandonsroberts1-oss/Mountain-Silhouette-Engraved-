@@ -1,6 +1,6 @@
 {
   "name": "fall-line-studio",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Search any ski area and design laser-ready SVG engravings of its trails, terrain and stats for xTool Studio.",
   "private": true,
   "type": "module",

@@ -421,3 +421,67 @@ test('exported art layers never overlap (no spot is burned twice)', async () => 
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Data loading: tile decoding, deadlines and Overpass mirror racing.
+
+import http from 'node:http';
+import { encodeTile } from './helpers/mvt-encode.mjs';
+
+test('vector tile decoder reads layers, properties and geometry', async () => {
+  const { decodeTile } = await import('../js/data/mvt.js');
+  const tile = decodeTile(encodeTile({
+    runs: [{ type: 'LineString', properties: { name: 'Ego Alley', difficulty: 'expert', downhill: 0, skiAreas: '["a1"]' }, geometry: [[[10, 20], [300, -40], [5000, 4100]]] }],
+    lifts: [{ type: 'LineString', properties: { name_and_type: 'Chair: Bluebird', status: 'operating' }, geometry: [[[1, 1], [2, 2]]] }],
+  }));
+  assert.deepEqual(Object.keys(tile).sort(), ['lifts', 'runs']);
+  assert.equal(tile.runs.extent, 4096);
+  assert.deepEqual(tile.runs.features[0].properties, { name: 'Ego Alley', difficulty: 'expert', downhill: 0, skiAreas: '["a1"]' });
+  assert.deepEqual(tile.runs.features[0].geometry, [[[10, 20], [300, -40], [5000, 4100]]]);
+});
+
+/** Local test servers: 'hang' never answers, 'fail' returns 500, else JSON. */
+async function testServer(behaviour) {
+  const srv = http.createServer((req, res) => {
+    if (behaviour === 'hang') return;
+    if (behaviour === 'fail') return res.writeHead(500).end('boom');
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(behaviour));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${srv.address().port}/api/interpreter`, close: () => { srv.closeAllConnections(); srv.close(); } };
+}
+
+test('requests time out with a clear message instead of hanging', async () => {
+  const { fetchWithTimeout } = await import('../js/data/net.js');
+  globalThis.__FALL_LINE_TIMEOUT_SCALE = 0.02;
+  const s = await testServer('hang');
+  try {
+    const t0 = Date.now();
+    await assert.rejects(fetchWithTimeout(s.url), (err) => err.name === 'TimeoutError' && /didn't respond within/.test(err.message));
+    assert.ok(Date.now() - t0 < 2000);
+  } finally {
+    s.close();
+    delete globalThis.__FALL_LINE_TIMEOUT_SCALE;
+  }
+});
+
+test('Overpass: a silent or failing server hands over to the next mirror', async () => {
+  const { overpass } = await import('../js/data/overpass.js');
+  globalThis.__FALL_LINE_TIMEOUT_SCALE = 0.02;
+  const hang = await testServer('hang');
+  const fail = await testServer('fail');
+  const busy = await testServer({ remark: 'runtime error: Query timed out in "query" at line 3', elements: [] });
+  const ok = await testServer({ elements: [{ type: 'way', id: 1 }] });
+  try {
+    assert.deepEqual((await overpass('q', { endpoints: [hang.url, ok.url] })).elements, [{ type: 'way', id: 1 }]);
+    assert.deepEqual((await overpass('q', { endpoints: [fail.url, busy.url, ok.url] })).elements, [{ type: 'way', id: 1 }]);
+    await assert.rejects(overpass('q', { endpoints: [hang.url, fail.url] }), /Overpass\) failed: .*(didn't respond|500)/);
+    const ctl = new AbortController();
+    const p = overpass('q', { endpoints: [hang.url], signal: ctl.signal });
+    ctl.abort();
+    await assert.rejects(p, (err) => err.name === 'AbortError');
+  } finally {
+    [hang, fail, busy, ok].forEach((s) => s.close());
+    delete globalThis.__FALL_LINE_TIMEOUT_SCALE;
+  }
+});

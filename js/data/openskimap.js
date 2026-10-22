@@ -1,14 +1,16 @@
 // OpenSkiMap API (https://openskimap.org): processed OpenStreetMap ski data
 // with ski-area membership, statistics and reverse-geocoded places.
 
-import { bboxOfCoords, expandBbox, bboxAround, bboxAreaKm2, polygonRings, geometryCenter } from './geo.js';
+import { bboxOfCoords, expandBbox, bboxAround, bboxAreaKm2, polygonRings, geometryCenter, pointInRing } from './geo.js';
+import { fetchWithTimeout } from './net.js';
+import { decodeTile, maybeGunzip } from './mvt.js';
+import { clipPolyline } from '../render/geometry.js';
 
 const API = 'https://api.openskimap.org';
+const TILES = 'https://tiles.openskimap.org';
 
-async function getJson(url, signal) {
-  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${new URL(url).host}`);
-  return res.json();
+function getJson(url, signal, kind = 'api') {
+  return fetchWithTimeout(url, { signal, kind, headers: { Accept: 'application/json' } });
 }
 
 function placeOf(props) {
@@ -38,7 +40,7 @@ function toArea(feature) {
 
 /** Search ski areas by name. Runs/lifts that match contribute their ski area. */
 export async function searchSkiAreas(query, { signal } = {}) {
-  const features = await getJson(`${API}/search?query=${encodeURIComponent(query)}`, signal);
+  const features = await getJson(`${API}/search?query=${encodeURIComponent(query)}`, signal, 'search');
   const out = new Map();
   for (const f of features || []) {
     const p = f.properties || {};
@@ -127,4 +129,156 @@ export async function fetchAreaFeatures(area, { signal } = {}) {
     }
   }
   return { runs, lifts, source: 'OpenSkiMap' };
+}
+
+// ---------------------------------------------------------------------------
+// OpenSkiMap vector tiles: the same CDN-served data openskimap.org draws its
+// map from (layers "runs" and "lifts", with ski-area ids on each feature).
+
+let templatePromise = null;
+
+/** Find the vector tile URL template that carries the "runs" layer. */
+function tileTemplate(signal) {
+  if (!templatePromise) {
+    templatePromise = discoverTemplate(signal).catch((err) => {
+      templatePromise = null;
+      throw err;
+    });
+  }
+  return templatePromise;
+}
+
+async function discoverTemplate(signal) {
+  const hasRuns = (tj) => Array.isArray(tj && tj.tiles) && tj.tiles.length && (!tj.vector_layers || tj.vector_layers.some((l) => l.id === 'runs'));
+  const fromTileJson = async (url) => {
+    const tj = await getJson(url, signal);
+    if (!hasRuns(tj)) throw new Error('no runs layer');
+    return tj.tiles[0];
+  };
+  const fromStyle = async (style) => {
+    const st = await getJson(`${TILES}/styles/${style}.json`, signal);
+    for (const [id, src] of Object.entries(st.sources || {})) {
+      if (src.type !== 'vector') continue;
+      const usesRuns = (st.layers || []).some((l) => l.source === id && l['source-layer'] === 'runs');
+      if (src.tiles && src.tiles.length && usesRuns) return src.tiles[0];
+      if (src.url && /^https?:/.test(src.url)) {
+        try {
+          return await fromTileJson(src.url);
+        } catch (err) {
+          if (err.name === 'AbortError') throw err;
+        }
+      }
+    }
+    throw new Error('no runs source');
+  };
+  // Ask the likely locations at once; the first that describes a "runs" layer wins.
+  try {
+    return await Promise.any([fromTileJson(`${TILES}/data/openskimap.json`), fromStyle('terrain_v2'), fromStyle('satellite_v2')]);
+  } catch (err) {
+    if (signal && signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+    const reasons = (err.errors || [err]).map((e) => e.message);
+    throw new Error(`map tiles unavailable (${[...new Set(reasons)].join('; ')})`);
+  }
+}
+
+const lonOf = (tx, z) => (tx / 2 ** z) * 360 - 180;
+const latOf = (ty, z) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * ty) / 2 ** z))) * 180) / Math.PI;
+const tileX = (lon, z) => Math.floor(((lon + 180) / 360) * 2 ** z);
+const tileY = (lat, z) => {
+  const r = (lat * Math.PI) / 180;
+  return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z);
+};
+
+async function pool(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i]);
+      }
+    })
+  );
+  return results;
+}
+
+/**
+ * Runs and lifts of a ski area from OpenSkiMap's vector tiles. Each tile's
+ * lines are clipped to the tile's exact square, so the pieces of a run that
+ * crosses tile edges meet end to end and are re-joined later.
+ */
+export async function fetchAreaFeaturesFromTiles(area, { signal, onProgress = () => {} } = {}) {
+  const template = await tileTemplate(signal);
+  const b = areaBbox(area);
+  let z = 14;
+  let tiles = [];
+  for (; z >= 12; z--) {
+    tiles = [];
+    for (let x = tileX(b.minLon, z); x <= tileX(b.maxLon, z); x++) {
+      for (let y = tileY(b.maxLat, z); y <= tileY(b.minLat, z); y++) tiles.push([x, y]);
+    }
+    if (tiles.length <= 30) break;
+  }
+  let done = 0;
+  let failed = 0;
+  const decoded = await pool(tiles, 6, async ([x, y]) => {
+    const url = template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    try {
+      const buf = await fetchWithTimeout(url, { signal, kind: 'tile', parse: 'arrayBuffer' });
+      return { x, y, layers: decodeTile(await maybeGunzip(buf)) };
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      if (err.status !== 404) failed++;
+      return null;
+    } finally {
+      onProgress(`Fetching trails from OpenSkiMap… ${++done}/${tiles.length} tiles`);
+    }
+  });
+  if (failed === tiles.length) throw new Error('OpenSkiMap map tiles could not be downloaded');
+
+  const runs = [];
+  const runAreas = [];
+  const lifts = [];
+  for (const t of decoded) {
+    if (!t) continue;
+    for (const [name, layer] of Object.entries(t.layers)) {
+      if (name !== 'runs' && name !== 'lifts') continue;
+      const ext = layer.extent;
+      const square = { shape: { type: 'rect', x: 0, y: 0, w: ext, h: ext } };
+      const toLonLat = ([px, py]) => [lonOf(t.x + px / ext, z), latOf(t.y + py / ext, z)];
+      for (const f of layer.features) {
+        const p = f.properties;
+        const inArea = String(p.skiAreas || '').includes(area.id);
+        if (name === 'runs') {
+          if (p.downhill == null) continue; // nordic, skitour, sled…
+          if (f.type === 'LineString') {
+            for (const line of f.geometry) {
+              for (const piece of clipPolyline(line, square)) runs.push({ name: p.name || null, difficulty: p.difficulty || null, coords: piece.map(toLonLat), inArea });
+            }
+          } else if (f.type === 'Polygon') {
+            for (const ring of f.geometry) runAreas.push({ name: p.name || null, difficulty: p.difficulty || null, coords: ring.map(toLonLat), inArea });
+          }
+        } else if (f.type === 'LineString' && (!p.status || p.status === 'operating')) {
+          for (const line of f.geometry) {
+            for (const piece of clipPolyline(line, square)) lifts.push({ name: p.name_and_type || null, type: null, coords: piece.map(toLonLat), inArea });
+          }
+        }
+      }
+    }
+  }
+
+  // Prefer exact ski-area membership; otherwise keep what lies in the area.
+  const rings = polygonRings(area.geometry);
+  const nearby = (f) => !rings.length || f.coords.some((c) => rings.some((r) => pointInRing(c, r)));
+  const pick = (list) => {
+    const mine = list.filter((f) => f.inArea);
+    return (mine.length ? mine : list.filter(nearby)).map(({ inArea, ...f }) => f);
+  };
+  const lineRuns = pick(runs);
+  return {
+    runs: lineRuns.length ? lineRuns : pick(runAreas),
+    lifts: pick(lifts),
+    source: 'OpenSkiMap map tiles',
+  };
 }

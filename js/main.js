@@ -12,7 +12,7 @@ import {
 } from './format.js';
 
 // Shown in the footer so a stale cached copy is easy to spot.
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.4.0';
 
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
 const STORAGE_KEY = 'fall-line-studio:v2';
@@ -325,9 +325,28 @@ function setStatus(msg, isError = false) {
   el.classList.toggle('error', !!isError);
 }
 
-function setBusy(msg) {
+// Busy pill: message, elapsed seconds (so a slow server never looks frozen)
+// and, while a mountain is loading, a Cancel button.
+let busyTimer = 0;
+let busyStart = 0;
+function setBusy(msg, { cancellable = false } = {}) {
   $('busy').classList.toggle('hidden', !msg);
   $('busy-text').textContent = msg || '';
+  if (!msg) {
+    clearInterval(busyTimer);
+    busyTimer = 0;
+    $('busy-time').textContent = '';
+    $('busy-cancel').classList.add('hidden');
+    return;
+  }
+  if (cancellable) $('busy-cancel').classList.remove('hidden');
+  if (!busyTimer) {
+    busyStart = Date.now();
+    busyTimer = setInterval(() => {
+      const s = Math.round((Date.now() - busyStart) / 1000);
+      $('busy-time').textContent = s >= 3 ? `${s}s` : '';
+    }, 500);
+  }
 }
 
 async function runSearch(query, { autoPick = false } = {}) {
@@ -376,10 +395,11 @@ function renderResults(results) {
 
 async function selectArea(area) {
   loadCtl?.abort();
-  loadCtl = new AbortController();
-  setBusy(`Loading ${area.name}…`);
+  const ctl = new AbortController();
+  loadCtl = ctl;
+  setBusy(`Loading ${area.name}…`, { cancellable: true });
   try {
-    const data = await loadArea(area, { signal: loadCtl.signal, onProgress: (m) => setBusy(m) });
+    const data = await loadArea(area, { signal: ctl.signal, onProgress: (m) => ctl === loadCtl && setBusy(m, { cancellable: true }) });
     current = {
       ...data,
       autoAzimuth: uphillBearing(data.model, data.dem),
@@ -390,17 +410,25 @@ async function selectArea(area) {
     };
     sceneCache = { key: '', scene: null };
     settings.view.azimuthOffset = 0;
-    setStatus(`Loaded ${data.model.runs.length} run segments and ${data.model.lifts.length} lifts from ${data.features.source}.${data.notes.length ? ' ' + data.notes.join(' ') : ''}`);
+    setStatus(`Loaded ${data.model.runs.length} trails and ${data.model.lifts.length} lifts from ${data.features.source}.`);
     hydrateAreaControls();
     syncControls();
     schedule();
   } catch (err) {
     if (err.name === 'AbortError') return;
     console.error(err);
-    setStatus(`Couldn't load ${area.name}: ${err.message}`, true);
+    setStatus(`Couldn't load ${area.name}: ${err.message}. Try again in a minute, or pick another result.`, true);
   } finally {
-    setBusy('');
+    if (ctl === loadCtl) setBusy('');
   }
+}
+
+function cancelLoad() {
+  if (!loadCtl) return;
+  loadCtl.abort();
+  loadCtl = null;
+  setBusy('');
+  setStatus('Loading cancelled.');
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +630,7 @@ function wireControls() {
     runSearch($('search-input').value);
   });
 
+  $('busy-cancel').addEventListener('click', cancelLoad);
   $('btn-export-svg').addEventListener('click', () => exportSvg().catch((err) => setStatus(`SVG export failed: ${err.message}`, true)));
   $('btn-export-png').addEventListener('click', () => exportPng().catch((err) => setStatus(`PNG export failed: ${err.message}`, true)));
 }

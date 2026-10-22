@@ -203,7 +203,7 @@
           <p><b>Search for a ski area</b> to draw its trails.</p>
           <p class="hint">Trails &amp; lifts come from OpenStreetMap, terrain from AWS Terrain Tiles.</p>
         </div>
-        <div id="busy" class="busy hidden"><span class="spinner"></span><span id="busy-text">Loading…</span></div>
+        <div id="busy" class="busy hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="busy-text">Loading…</span><span id="busy-time" class="busy-time"></span><button type="button" id="busy-cancel" class="btn tiny hidden">Cancel</button></div>
       </div>
       <div class="facts" id="facts"></div>
       <footer class="attribution">

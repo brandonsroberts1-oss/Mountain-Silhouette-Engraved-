@@ -12,6 +12,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { encodeTile, project } from './helpers/mvt-encode.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -95,18 +96,63 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
+// Which data path the mocks simulate:
+//   api      – OpenSkiMap bbox API works (default)
+//   tiles    – bbox API missing (404); OpenSkiMap vector tiles work
+//   overpass – OpenSkiMap down; overpass-api.de hangs, a mirror answers
+//   hang     – every trail source hangs (search still works)
+let mode = 'api';
+const never = () => new Promise(() => {});
+
+function tileFor(z, x, y) {
+  const ext = 4096;
+  const inTile = (pts) => pts.some(([px, py]) => px > -256 && py > -256 && px < ext + 256 && py < ext + 256);
+  const skiAreas = JSON.stringify([AREA_ID]);
+  const runs = fixture.features.runs
+    .map((r) => ({ type: 'LineString', properties: { name: r.name, difficulty: r.difficulty, downhill: 0, skiAreas }, geometry: [r.coords.map((c) => project(c, +z, +x, +y))] }))
+    .filter((f) => inTile(f.geometry[0]));
+  const lifts = fixture.features.lifts
+    .map((l) => ({ type: 'LineString', properties: { name_and_type: `Chairlift: ${l.name}`, status: 'operating', skiAreas }, geometry: [l.coords.map((c) => project(c, +z, +x, +y))] }))
+    .filter((f) => inTile(f.geometry[0]));
+  return Buffer.from(encodeTile({ runs, lifts }));
+}
+
+const overpassJson = {
+  elements: [
+    ...fixture.features.runs.map((r, i) => ({ type: 'way', id: i + 1, tags: { 'piste:type': 'downhill', name: r.name, 'piste:difficulty': r.difficulty }, geometry: r.coords.map(([lon, lat]) => ({ lat, lon })) })),
+    ...fixture.features.lifts.map((l, i) => ({ type: 'way', id: 1000 + i, tags: { aerialway: 'chair_lift', name: l.name }, geometry: l.coords.map(([lon, lat]) => ({ lat, lon })) })),
+  ],
+};
+
 await page.route('https://api.openskimap.org/**', (route) => {
   const url = new URL(route.request().url());
   if (url.pathname === '/search') return route.fulfill({ json: [areaFeature], headers: CORS });
-  if (url.pathname === '/features.geojson') return route.fulfill({ json: featureCollection, headers: CORS });
+  if (mode === 'hang') return never();
+  if (url.pathname === '/features.geojson' && mode === 'api') return route.fulfill({ json: featureCollection, headers: CORS });
   return route.fulfill({ status: 404, body: '', headers: CORS });
 });
+await page.route('https://tiles.openskimap.org/**', (route) => {
+  const url = new URL(route.request().url());
+  if (mode === 'hang') return never();
+  if (mode !== 'tiles') return route.fulfill({ status: 404, body: '', headers: CORS });
+  if (url.pathname === '/data/openskimap.json') {
+    return route.fulfill({ json: { tiles: ['https://tiles.openskimap.org/data/openskimap/{z}/{x}/{y}.pbf'], vector_layers: [{ id: 'runs' }, { id: 'lifts' }] }, headers: CORS });
+  }
+  const m = url.pathname.match(/\/data\/openskimap\/(\d+)\/(\d+)\/(\d+)\.pbf$/);
+  if (m) return route.fulfill({ body: tileFor(m[1], m[2], m[3]), contentType: 'application/x-protobuf', headers: CORS });
+  return route.fulfill({ status: 404, body: '', headers: CORS });
+});
+await page.route(/overpass-api\.de|overpass\.private\.coffee|overpass\.kumi\.systems|maps\.mail\.ru/, (route) => {
+  if (mode === 'overpass' && route.request().url().includes('private.coffee')) return route.fulfill({ json: overpassJson, headers: CORS });
+  if (mode === 'overpass' || mode === 'hang') return never();
+  return route.abort();
+});
+await page.route(/nominatim\.openstreetmap\.org/, (route) => route.abort());
 await page.route('https://s3.amazonaws.com/elevation-tiles-prod/**', (route) => {
   const m = route.request().url().match(/terrarium\/(\d+)\/(\d+)\/(\d+)\.png/);
   const body = m && tile(m[1], m[2], m[3]);
   return body ? route.fulfill({ body, contentType: 'image/png', headers: CORS }) : route.fulfill({ status: 404, body: '', headers: CORS });
 });
-await page.route(/overpass-api\.de|overpass\.kumi\.systems|maps\.mail\.ru|nominatim\.openstreetmap\.org/, (route) => route.abort());
 
 let failures = 0;
 async function step(name, fn) {
@@ -213,6 +259,55 @@ await step('settings persist across reloads', async () => {
 
 await step('no console errors', async () => {
   assert.deepEqual(errors, []);
+});
+
+// --- Fallback paths. These deliberately fail requests, so they run after the
+// console-error check. Timeouts are scaled down so the hang cases are quick.
+async function loadFixture() {
+  await page.click('#view-mode button[data-value="3d"]');
+  await page.fill('#search-input', 'Test Peak');
+  await page.click('#search-form button[type=submit]');
+  await page.waitForSelector('#search-results button');
+  await page.evaluate(() => (document.querySelector('#search-status').textContent = ''));
+  await page.click('#search-results button');
+}
+const statusText = () => page.textContent('#search-status');
+
+await step('falls back to OpenSkiMap map tiles when the bbox API is missing', async () => {
+  mode = 'tiles';
+  await loadFixture();
+  await page.waitForFunction(() => /Loaded/.test(document.querySelector('#search-status').textContent), null, { timeout: 30000 });
+  assert.match(await statusText(), /OpenSkiMap map tiles/);
+  // Runs split across tile edges must be re-joined into whole trails.
+  assert.match(await page.textContent('#facts'), /Trails\s*34/);
+});
+
+await step('falls back to an Overpass mirror when the main server hangs', async () => {
+  mode = 'overpass';
+  await page.evaluate(() => (window.__FALL_LINE_TIMEOUT_SCALE = 0.05));
+  await loadFixture();
+  await page.waitForFunction(() => /Loaded|Couldn't/.test(document.querySelector('#search-status').textContent), null, { timeout: 30000 });
+  assert.match(await statusText(), /Loaded .*OpenStreetMap \(Overpass\)/);
+  assert.match(await page.textContent('#facts'), /Trails\s*34/);
+});
+
+await step('shows a clear error instead of spinning forever when every source hangs', async () => {
+  mode = 'hang';
+  await loadFixture();
+  await page.waitForFunction(() => /Couldn't load/.test(document.querySelector('#search-status').textContent), null, { timeout: 30000 });
+  const msg = await statusText();
+  assert.match(msg, /didn't respond within/);
+  assert.ok(await page.$eval('#busy', (el) => el.classList.contains('hidden')), 'spinner hidden');
+});
+
+await step('Cancel stops a slow load', async () => {
+  mode = 'hang';
+  await page.evaluate(() => (window.__FALL_LINE_TIMEOUT_SCALE = 1));
+  await loadFixture();
+  await page.waitForSelector('#busy-cancel:not(.hidden)', { timeout: 5000 });
+  await page.click('#busy-cancel');
+  await page.waitForFunction(() => /cancelled/i.test(document.querySelector('#search-status').textContent), null, { timeout: 5000 });
+  assert.ok(await page.$eval('#busy', (el) => el.classList.contains('hidden')));
 });
 
 await browser.close();

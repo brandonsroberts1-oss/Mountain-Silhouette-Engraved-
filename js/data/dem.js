@@ -2,6 +2,7 @@
 // elevation = R * 256 + G + B / 256 - 32768 metres.
 
 import { DemGrid } from '../render/dem-grid.js';
+import { fetchWithTimeout } from './net.js';
 
 const TILE_URL = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const TILE = 256;
@@ -20,9 +21,8 @@ async function loadTile(z, x, y, signal) {
   const url = TILE_URL(z, x, y);
   if (tileCache.has(url)) return tileCache.get(url);
   const p = (async () => {
-    const res = await fetch(url, { signal, mode: 'cors' });
-    if (!res.ok) throw new Error(`Terrain tile ${z}/${x}/${y}: ${res.status}`);
-    const bmp = await createImageBitmap(await res.blob());
+    const blob = await fetchWithTimeout(url, { signal, kind: 'terrainTile', parse: 'blob', mode: 'cors' });
+    const bmp = await createImageBitmap(blob);
     const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(TILE, TILE) : Object.assign(document.createElement('canvas'), { width: TILE, height: TILE });
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
