@@ -97,9 +97,8 @@ directly from disk won't work.
 ### Deploying (GitHub Pages)
 
 1. Settings → Pages → *Build and deployment* → **Source: GitHub Actions** (one time).
-2. The `pages` workflow runs on every push to the default branch, plus weekly
-   to refresh trail data. It builds the data (~10–20 min the first time each
-   week; cached otherwise) and deploys the site. You can also run it by hand
+2. The `pages` workflow runs on every push to the default branch and daily. It
+   rebuilds the trail data once a week (cached otherwise) and deploys the site. You can also run it by hand
    from the Actions tab (*Run workflow*, optionally with *refresh*).
 
 GitHub Pages caches files for about 10 minutes. After an update, hard-refresh
@@ -118,7 +117,9 @@ search index (`data/index.json`) and one small file per ski area
 browser loads trails from the app's own site, so it doesn't depend on
 third-party APIs being reachable, fast or CORS-friendly. Downloads that fail
 (the download server sometimes times out) are retried for several minutes, and
-if they still fail, the site is deployed with the previous week's data.
+if they still fail, the site is deployed with the previous copy of the data
+(or, before the first successful build, without bundled data). The workflow runs
+daily, so a missed weekly refresh is retried the next day.
 
 Following OpenSkiData's terms, the app does **not** use OpenSkiMap's map tiles
 directly.
@@ -159,7 +160,7 @@ js/fonts.js                    bundled OFL fonts (Fontsource WOFF, latin + latin
 js/data/                       bundled data (local.js), OpenSkiMap API, Overpass/Nominatim,
                                request deadlines (net.js), terrain tiles, model + stats
 scripts/build-data.mjs         OpenSkiMap GeoJSON downloads → data/index.json + data/areas/*.json
-.github/workflows/pages.yml    builds the data weekly and deploys app + data to GitHub Pages
+.github/workflows/pages.yml    builds the data (weekly) and deploys app + data to GitHub Pages
 js/render/scene.js             3D oblique projection, ray-marched hidden lines,
                                floating-horizon ridgelines/outline, plan view + contours
 js/render/contours.js          marching squares

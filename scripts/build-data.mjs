@@ -87,7 +87,7 @@ async function* features(stream) {
 // The download server sits behind Cloudflare and now and then answers 524
 // (origin timeout) or drops a transfer, so each file is downloaded to disk in
 // full, checked against Content-Length and retried with growing waits.
-const RETRY_WAITS = (process.env.BUILD_DATA_RETRY_WAITS || '30,60,120,240,300').split(',').map(Number);
+const RETRY_WAITS = (process.env.BUILD_DATA_RETRY_WAITS || '30,120,300').split(',').map(Number);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
 
 async function downloadOnce(url, dest) {

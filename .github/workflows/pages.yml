@@ -4,13 +4,19 @@ name: pages
 # downloads and publishes it to GitHub Pages together with the app, so the
 # browser loads trails from this site instead of third-party APIs.
 #
+# Data is rebuilt once a week (cached in between). If OpenSkiMap's download
+# server is down, the newest earlier copy is deployed instead; if there is no
+# earlier copy yet, the app is deployed without bundled data (it falls back to
+# live APIs) and the run is marked failed so it gets noticed. The daily
+# schedule retries until a build succeeds.
+#
 # One-time setup: Settings → Pages → Build and deployment → Source: "GitHub Actions".
 
 on:
   push:
     branches: [claude/peaceful-sagan-3veh0b, main]
   schedule:
-    - cron: '17 4 * * 1' # weekly data refresh, Mondays 04:17 UTC
+    - cron: '17 4 * * *' # daily; rebuilds data only when this week's copy is missing
   workflow_dispatch:
     inputs:
       refresh:
@@ -31,6 +37,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      data: ${{ steps.assemble.outputs.data }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,27 +56,32 @@ jobs:
       - name: Build trail data from OpenSkiMap downloads
         id: build-data
         if: steps.data-cache.outputs.cache-hit != 'true'
-        # With an older copy restored, a failed download deploys that copy
-        # instead of failing the whole site update.
-        continue-on-error: ${{ steps.data-cache.outputs.cache-matched-key != '' }}
+        continue-on-error: true
         run: |
           node --max-old-space-size=6144 scripts/build-data.mjs --out _data_new --download-dir "$RUNNER_TEMP/openskimap"
           rm -rf _data && mv _data_new _data
-      - if: steps.build-data.outcome == 'failure'
-        run: echo "::warning::Trail data download failed; deploying the previous copy (${{ steps.data-cache.outputs.cache-matched-key }})"
       - if: steps.build-data.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: _data
           key: ${{ steps.data-cache.outputs.cache-primary-key }}
       - name: Assemble site
+        id: assemble
         run: |
           mkdir -p _site
           cp -r index.html css js fonts vendor _site/
-          cp -r _data _site/data
           touch _site/.nojekyll
-          du -sh _site/data
-          ls _site/data/areas | wc -l
+          if [ -f _data/index.json ]; then
+            cp -r _data _site/data
+            echo "Trail data: $(du -sh _site/data | cut -f1), $(ls _site/data/areas | wc -l) ski areas"
+            if [ "${{ steps.build-data.outcome }}" = failure ]; then
+              echo "::warning::Trail data download failed; deploying the previous copy (${{ steps.data-cache.outputs.cache-matched-key }})"
+            fi
+            echo "data=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No trail data available (download failed and nothing cached yet); deploying the app without bundled data"
+            echo "data=no" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
@@ -82,3 +95,7 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - if: needs.build.outputs.data != 'yes'
+        run: |
+          echo "::error::Deployed without bundled trail data; the next scheduled run will try again"
+          exit 1
