@@ -26,6 +26,17 @@ export const DEFAULT_URL = 'https://www.opensnowmap.org/download/planet_pistes.o
 
 const LIFTS = new Set(['chair_lift', 'gondola', 'cable_car', 'mixed_lift', 'drag_lift', 't-bar', 'j-bar', 'platter', 'rope_tow']);
 const dead = (t) => t.abandoned === 'yes' || t.disused === 'yes' || t['piste:abandoned'] === 'yes';
+// The engraving fonts are Latin-only, so names in other scripts (ニセコ, Шерегеш)
+// give way to their English or international form when there is one.
+const LATIN = /^[\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]*$/u;
+function label(t, ...keys) {
+  for (const k of keys) {
+    const v = t[k];
+    if (!v) continue;
+    return LATIN.test(v) ? v : t[`${k}:en`] || t['name:en'] || t.int_name || t['name:latin'] || v;
+  }
+  return null;
+}
 // piste:type can list several uses, e.g. "downhill;skitour".
 const downhill = (t) => !!t['piste:type'] && t['piste:type'].split(';').some((v) => v.trim() === 'downhill');
 
@@ -241,21 +252,21 @@ export async function readOpenSnowMap(file, { only = null } = {}) {
       if (coords.length < 2) return;
       const closed = w.refs.length >= 4 && w.refs[0] === w.refs[w.refs.length - 1];
       if (downhill(t)) {
-        pistes.set(w.id, { name: t['piste:name'] || t.name || null, difficulty: t['piste:difficulty'] || null, area: closed || t.area === 'yes', c: packLine(coords) });
+        pistes.set(w.id, { name: label(t, 'piste:name', 'name'), difficulty: t['piste:difficulty'] || null, area: closed || t.area === 'yes', c: packLine(coords) });
       } else if (LIFTS.has(t.aerialway)) {
-        lifts.set(w.id, { name: t.name || null, type: t.aerialway, c: packLine(coords) });
+        lifts.set(w.id, { name: label(t, 'name'), type: t.aerialway, c: packLine(coords) });
       } else {
         // Outlines and untagged route members; resolved once relations are in.
         ways.set(w.id, coords);
-        if (t.landuse === 'winter_sports' && closed) polys.push({ key: `w${w.id}`, name: t.name || null, rings: [coords] });
+        if (t.landuse === 'winter_sports' && closed) polys.push({ key: `w${w.id}`, name: label(t, 'name'), rings: [coords] });
       }
     },
     onRelation(r) {
       const t = r.tags;
       if (dead(t)) return;
-      if (t.site === 'piste') sites.push({ id: r.id, name: t.name || null, web: t.website || '', members: r.members });
-      else if (t.landuse === 'winter_sports') multipolygons.push({ id: r.id, name: t.name || null, outer: r.members.filter((m) => m.type === 'way' && m.role !== 'inner').map((m) => m.ref) });
-      else if (downhill(t)) routes.push({ name: t['piste:name'] || t.name || null, difficulty: t['piste:difficulty'] || null, ways: r.members.filter((m) => m.type === 'way').map((m) => m.ref) });
+      if (t.site === 'piste') sites.push({ id: r.id, name: label(t, 'name'), web: t.website || '', members: r.members });
+      else if (t.landuse === 'winter_sports') multipolygons.push({ id: r.id, name: label(t, 'name'), outer: r.members.filter((m) => m.type === 'way' && m.role !== 'inner').map((m) => m.ref) });
+      else if (downhill(t)) routes.push({ name: label(t, 'piste:name', 'name'), difficulty: t['piste:difficulty'] || null, ways: r.members.filter((m) => m.type === 'way').map((m) => m.ref) });
     },
   });
   console.log(`pistes: ${pistes.size}, lifts: ${lifts.size}, sites: ${sites.length}, outlines: ${polys.length + multipolygons.length} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);

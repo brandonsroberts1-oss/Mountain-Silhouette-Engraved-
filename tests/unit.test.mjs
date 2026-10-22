@@ -586,7 +586,7 @@ test('build-data falls back to the OpenSnowMap OSM extract when OpenSkiMap is do
     assert.match(stdout, /OpenSkiMap data unavailable \(502.*using OpenSnowMap/);
     const { meta, at, byName } = readIndex(path.join(tmp, 'out'));
     assert.equal(meta.sourceName, 'OpenSnowMap');
-    assert.deepEqual(Object.keys(byName).sort(), ['Duplicate Peak', 'Split Mountain', 'Test Peak', 'Zürs am Arlberg'], 'unnamed outlines are left out, same-named outline joins its site');
+    assert.deepEqual(Object.keys(byName).sort(), ['Duplicate Peak', 'Niseko Grand Hirafu', 'Split Mountain', 'Test Peak', 'Zürs am Arlberg'], 'unnamed outlines are left out, same-named outline joins its site, Latin names preferred');
     const peak = byName['Test Peak'];
     assert.deepEqual([peak[at.region], peak[at.country], peak[at.cc], peak[at.convention]], ['Vermont', 'United States of America', 'US', 'north_america']);
     assert.equal(peak[at.runs], fixture.features.runs.length, 'route-only runs included, nordic left out');
@@ -603,6 +603,7 @@ test('build-data falls back to the OpenSnowMap OSM extract when OpenSkiMap is do
     assert.deepEqual(area(zurs).lifts.map((l) => l.n), ['Seekopf']);
     assert.deepEqual(area(byName['Split Mountain']).runs.map((r) => r.n), ['Split Run'], 'multipolygon outline assembled from two ways');
     assert.deepEqual(area(byName['Duplicate Peak']).runs.map((r) => r.n).sort(), ['Dup One', 'Dup Two']);
+    assert.deepEqual(area(byName['Niseko Grand Hirafu']).runs.map((r) => r.n), ['Jumbo']);
     assert.match(fs.readFileSync(path.join(tmp, 'out/LICENSE.txt'), 'utf8'), /opensnowmap\.org/);
   } finally {
     s.close();
@@ -624,7 +625,7 @@ test('OpenSnowMap reader handles uncompressed XML read in tiny chunks', async ()
     const { at, byName } = readIndex(path.join(tmp, 'out'));
     assert.equal(byName['Test Peak'][at.runs], fixture.features.runs.length);
     assert.equal(byName['Test Peak'][at.cc], '', 'no places without the admin file');
-    assert.equal(Object.keys(byName).length, 4);
+    assert.equal(Object.keys(byName).length, 5);
   } finally {
     s.close();
     fs.rmSync(tmp, { recursive: true, force: true });

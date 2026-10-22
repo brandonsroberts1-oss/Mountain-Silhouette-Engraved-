@@ -6,6 +6,7 @@
 //   Zürs am Arlberg site=piste relation with a member run and lift, no outline
 //   Split Mountain  landuse=winter_sports multipolygon from two half-ring ways
 //   Duplicate Peak  site relation plus a same-named outline it doesn't list (one area)
+//   Niseko Grand Hirafu  site relation named in Japanese, with name:en
 // and things to leave out: an unnamed outline, a nordic piste, a magic carpet,
 // an abandoned chair.
 
@@ -80,6 +81,10 @@ export function writeOsmPistesFixture(dir, fixture, { gzip = true } = {}) {
   rels.push({ members: [['way', dupRun, '']], tags: { type: 'site', site: 'piste', name: 'Duplicate Peak' } });
   way(box([dx + 0.01, dy], 0.01), { landuse: 'winter_sports', name: 'Duplicate Peak' }, { closed: true });
   way([[dx + 0.008, dy + 0.002], [dx + 0.012, dy - 0.002]], { 'piste:type': 'downhill', name: 'Dup Two' });
+
+  // Niseko: Japanese names with English ones alongside.
+  const hirafu = way([[140.68, 42.86], [140.69, 42.85]], { 'piste:type': 'downhill', name: 'ジャンボ', 'name:en': 'Jumbo', 'piste:difficulty': 'easy' });
+  rels.push({ members: [['way', hirafu, '']], tags: { type: 'site', site: 'piste', name: 'ニセコ東急 グラン・ヒラフ', 'name:en': 'Niseko Grand Hirafu' } });
 
   // A tagged node (with child elements), as in the real extract.
   const cannon = ++nextNode;
