@@ -2,9 +2,11 @@
 //
 //   node tests/e2e.mjs [--shots <dir>]
 //
-// Serves the app locally, answers OpenSkiMap requests from the synthetic
-// fixture, and serves terrain tiles from tests/.cache/tiles (downloaded on
-// first use with curl). Requires the `playwright` package.
+// Builds bundled trail data from the synthetic fixture (scripts/build-data.mjs
+// on OpenSkiMap-format files), serves the app locally, and serves terrain tiles
+// from tests/.cache/tiles (downloaded on first use with curl). The main flow
+// runs with every third-party trail API blocked; later steps remove the bundle
+// to exercise the API / Overpass fallbacks. Requires the `playwright` package.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -12,7 +14,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { encodeTile, project } from './helpers/mvt-encode.mjs';
+import { writeOpenSkiMapFixture } from './helpers/openskimap-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -31,6 +33,13 @@ if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 
 const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/synthetic-area.json'), 'utf8'));
 const AREA_ID = fixture.area.id;
+
+// Bundled data, built the same way the Pages workflow does.
+const DATA_SRC = path.join(ROOT, 'tests/.cache/openskimap-src');
+const DATA_DIR = path.join(ROOT, 'tests/.cache/data');
+writeOpenSkiMapFixture(DATA_SRC, fixture);
+execFileSync('node', [path.join(ROOT, 'scripts/build-data.mjs'), '--source-dir', DATA_SRC, '--out', DATA_DIR], { stdio: 'ignore' });
+let bundle = true; // serve /data/ (the self-hosted trail data)
 
 const areaFeature = {
   type: 'Feature',
@@ -77,7 +86,14 @@ function tile(z, x, y) {
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff': 'font/woff', '.json': 'application/json', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
-  const p = path.join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+  const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (urlPath.startsWith('/data/')) {
+    const file = path.join(DATA_DIR, urlPath.slice('/data/'.length));
+    if (!bundle || !file.startsWith(DATA_DIR) || !fs.existsSync(file)) return res.writeHead(404).end();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return fs.createReadStream(file).pipe(res);
+  }
+  const p = path.join(ROOT, urlPath);
   const file = p.endsWith('/') ? path.join(p, 'index.html') : p;
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) {
     res.writeHead(404).end();
@@ -96,26 +112,13 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
-// Which data path the mocks simulate:
-//   api      – OpenSkiMap bbox API works (default)
-//   tiles    – bbox API missing (404); OpenSkiMap vector tiles work
+// Which third-party behaviour the mocks simulate (bundle aside):
+//   blocked  – every trail/search API is unreachable (default: bundle only)
+//   api      – OpenSkiMap search + bbox API work
 //   overpass – OpenSkiMap down; overpass-api.de hangs, a mirror answers
-//   hang     – every trail source hangs (search still works)
-let mode = 'api';
+//   hang     – every trail source hangs (OpenSkiMap search still works)
+let mode = 'blocked';
 const never = () => new Promise(() => {});
-
-function tileFor(z, x, y) {
-  const ext = 4096;
-  const inTile = (pts) => pts.some(([px, py]) => px > -256 && py > -256 && px < ext + 256 && py < ext + 256);
-  const skiAreas = JSON.stringify([AREA_ID]);
-  const runs = fixture.features.runs
-    .map((r) => ({ type: 'LineString', properties: { name: r.name, difficulty: r.difficulty, downhill: 0, skiAreas }, geometry: [r.coords.map((c) => project(c, +z, +x, +y))] }))
-    .filter((f) => inTile(f.geometry[0]));
-  const lifts = fixture.features.lifts
-    .map((l) => ({ type: 'LineString', properties: { name_and_type: `Chairlift: ${l.name}`, status: 'operating', skiAreas }, geometry: [l.coords.map((c) => project(c, +z, +x, +y))] }))
-    .filter((f) => inTile(f.geometry[0]));
-  return Buffer.from(encodeTile({ runs, lifts }));
-}
 
 const overpassJson = {
   elements: [
@@ -126,22 +129,13 @@ const overpassJson = {
 
 await page.route('https://api.openskimap.org/**', (route) => {
   const url = new URL(route.request().url());
+  if (mode === 'blocked') return route.abort();
   if (url.pathname === '/search') return route.fulfill({ json: [areaFeature], headers: CORS });
   if (mode === 'hang') return never();
   if (url.pathname === '/features.geojson' && mode === 'api') return route.fulfill({ json: featureCollection, headers: CORS });
   return route.fulfill({ status: 404, body: '', headers: CORS });
 });
-await page.route('https://tiles.openskimap.org/**', (route) => {
-  const url = new URL(route.request().url());
-  if (mode === 'hang') return never();
-  if (mode !== 'tiles') return route.fulfill({ status: 404, body: '', headers: CORS });
-  if (url.pathname === '/data/openskimap.json') {
-    return route.fulfill({ json: { tiles: ['https://tiles.openskimap.org/data/openskimap/{z}/{x}/{y}.pbf'], vector_layers: [{ id: 'runs' }, { id: 'lifts' }] }, headers: CORS });
-  }
-  const m = url.pathname.match(/\/data\/openskimap\/(\d+)\/(\d+)\/(\d+)\.pbf$/);
-  if (m) return route.fulfill({ body: tileFor(m[1], m[2], m[3]), contentType: 'application/x-protobuf', headers: CORS });
-  return route.fulfill({ status: 404, body: '', headers: CORS });
-});
+await page.route('https://tiles.openskimap.org/**', (route) => route.abort());
 await page.route(/overpass-api\.de|overpass\.private\.coffee|overpass\.kumi\.systems|maps\.mail\.ru/, (route) => {
   if (mode === 'overpass' && route.request().url().includes('private.coffee')) return route.fulfill({ json: overpassJson, headers: CORS });
   if (mode === 'overpass' || mode === 'hang') return never();
@@ -182,6 +176,7 @@ await step('selecting an area renders a preview with stats', async () => {
   await page.click('#search-results button');
   await page.waitForSelector('#preview svg', { timeout: 30000 });
   await page.waitForFunction(() => document.querySelectorAll('#preview svg path').length > 20);
+  assert.match(await page.textContent('#search-status'), /bundled OpenSkiMap data/);
   const facts = await page.textContent('#facts');
   assert.match(facts, /Summit/);
   assert.match(facts, /Trails\s*34/);
@@ -273,12 +268,14 @@ async function loadFixture() {
 }
 const statusText = () => page.textContent('#search-status');
 
-await step('falls back to OpenSkiMap map tiles when the bbox API is missing', async () => {
-  mode = 'tiles';
+await step('without bundled data, falls back to the OpenSkiMap API', async () => {
+  bundle = false;
+  mode = 'api';
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
   await loadFixture();
-  await page.waitForFunction(() => /Loaded/.test(document.querySelector('#search-status').textContent), null, { timeout: 30000 });
-  assert.match(await statusText(), /OpenSkiMap map tiles/);
-  // Runs split across tile edges must be re-joined into whole trails.
+  await page.waitForFunction(() => /Loaded|Couldn't/.test(document.querySelector('#search-status').textContent), null, { timeout: 30000 });
+  assert.match(await statusText(), /Loaded .*from OpenSkiMap/);
   assert.match(await page.textContent('#facts'), /Trails\s*34/);
 });
 

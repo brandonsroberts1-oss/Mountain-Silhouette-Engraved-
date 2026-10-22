@@ -96,30 +96,49 @@ directly from disk won't work.
 
 ### Deploying (GitHub Pages)
 
-Settings → Pages → *Deploy from a branch* → pick the branch and `/ (root)`.
-All paths are relative, so it works from a sub-path. GitHub Pages caches files
-for about 10 minutes. After an update, hard-refresh (Ctrl/Cmd+Shift+R) and check
-the version shown at the bottom of the page.
+1. Settings → Pages → *Build and deployment* → **Source: GitHub Actions** (one time).
+2. The `pages` workflow runs on every push to the default branch, plus weekly
+   to refresh trail data. It builds the data (~10–20 min the first time each
+   week; cached otherwise) and deploys the site. You can also run it by hand
+   from the Actions tab (*Run workflow*, optionally with *refresh*).
+
+GitHub Pages caches files for about 10 minutes. After an update, hard-refresh
+(Ctrl/Cmd+Shift+R) and check the version and data date at the bottom of the page.
+
+To run the app locally with bundled data, run `npm run build-data` (downloads
+about 1 GB from OpenSkiData) and then `node serve.mjs`.
 
 ## Data sources and accuracy
 
-- **Search:** the [OpenSkiMap](https://openskimap.org) search API
-  (`api.openskimap.org/search`), falling back to [Nominatim](https://nominatim.org).
-- **Trails and lifts** (© OpenStreetMap contributors). The app tries each
-  source in turn, so one slow or missing service doesn't block it:
-  1. the OpenSkiMap bbox API (`/features.geojson`), where deployed
-  2. OpenSkiMap's vector map tiles (`tiles.openskimap.org`, layers `runs`
-     and `lifts`), the same CDN data openskimap.org draws from
-  3. the [Overpass API](https://overpass-api.de). If the main server is
-     silent for a few seconds, mirrors are asked in parallel and the first
-     good answer wins.
-- **Elevation:** [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
-  (Terrarium PNG, zoom ≤ 14). OpenSkiMap's own min/max elevation is used when
-  available.
+**Trail data is self-hosted.** The `pages` GitHub Actions workflow downloads
+OpenSkiMap's published GeoJSON files (`ski_areas`, `runs`, `lifts` from
+[OpenSkiData](https://openskidata.org)) once a week. It splits them into a
+search index (`data/index.json`) and one small file per ski area
+(`data/areas/<id>.json`), and publishes them to GitHub Pages with the app. The
+browser loads trails from the app's own site, so it doesn't depend on
+third-party APIs being reachable, fast or CORS-friendly.
 
-Every request has a deadline. The loading pill shows elapsed time and a
-**Cancel** button. If every source fails, the app says which ones failed and
-why, instead of spinning.
+Following OpenSkiData's terms, the app does **not** use OpenSkiMap's map tiles
+directly.
+
+Fallbacks, used only when a deployment has no bundled data (e.g. `node serve.mjs`
+without `npm run build-data`) or a ski area isn't in it:
+
+- **Search:** the OpenSkiMap search API, then [Nominatim](https://nominatim.org).
+- **Trails:** the [Overpass API](https://overpass-api.de). If the main server is
+  silent for a few seconds, mirrors are asked in parallel and the first good
+  answer wins.
+
+Every network request has a deadline. The loading pill shows elapsed time and a
+**Cancel** button, and failures name the source and reason.
+
+**Elevation:** [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
+(Terrarium PNG, zoom ≤ 14). OpenSkiMap's own min/max elevation is used when
+available.
+
+**Licence:** trail data © OpenStreetMap contributors (ODbL), with Skimap.org
+data, processed by OpenSkiMap. The published `data/` folder carries this notice
+in `data/LICENSE.txt`, and the app footer credits the sources.
 
 OpenStreetMap often splits a run into several segments and maps some glades or
 connectors without names. The trail count groups segments by name and only counts
@@ -135,8 +154,10 @@ js/main.js                     state, controls, preview, export
 js/content.js                  stats → printable content (icons, units, overrides)
 js/format.js                   units, coordinates, difficulty conventions (NA / EU / JP)
 js/fonts.js                    bundled OFL fonts (Fontsource WOFF, latin + latin-ext)
-js/data/                       OpenSkiMap API + vector tiles (mvt.js decoder), Overpass/Nominatim,
+js/data/                       bundled data (local.js), OpenSkiMap API, Overpass/Nominatim,
                                request deadlines (net.js), terrain tiles, model + stats
+scripts/build-data.mjs         OpenSkiMap GeoJSON downloads → data/index.json + data/areas/*.json
+.github/workflows/pages.yml    builds the data weekly and deploys app + data to GitHub Pages
 js/render/scene.js             3D oblique projection, ray-marched hidden lines,
                                floating-horizon ridgelines/outline, plan view + contours
 js/render/contours.js          marching squares

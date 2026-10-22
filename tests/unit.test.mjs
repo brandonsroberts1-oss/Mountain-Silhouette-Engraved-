@@ -426,19 +426,9 @@ test('exported art layers never overlap (no spot is burned twice)', async () => 
 // Data loading: tile decoding, deadlines and Overpass mirror racing.
 
 import http from 'node:http';
-import { encodeTile } from './helpers/mvt-encode.mjs';
-
-test('vector tile decoder reads layers, properties and geometry', async () => {
-  const { decodeTile } = await import('../js/data/mvt.js');
-  const tile = decodeTile(encodeTile({
-    runs: [{ type: 'LineString', properties: { name: 'Ego Alley', difficulty: 'expert', downhill: 0, skiAreas: '["a1"]' }, geometry: [[[10, 20], [300, -40], [5000, 4100]]] }],
-    lifts: [{ type: 'LineString', properties: { name_and_type: 'Chair: Bluebird', status: 'operating' }, geometry: [[[1, 1], [2, 2]]] }],
-  }));
-  assert.deepEqual(Object.keys(tile).sort(), ['lifts', 'runs']);
-  assert.equal(tile.runs.extent, 4096);
-  assert.deepEqual(tile.runs.features[0].properties, { name: 'Ego Alley', difficulty: 'expert', downhill: 0, skiAreas: '["a1"]' });
-  assert.deepEqual(tile.runs.features[0].geometry, [[[10, 20], [300, -40], [5000, 4100]]]);
-});
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+import { writeOpenSkiMapFixture } from './helpers/openskimap-fixture.mjs';
 
 /** Local test servers: 'hang' never answers, 'fail' returns 500, else JSON. */
 async function testServer(behaviour) {
@@ -484,4 +474,45 @@ test('Overpass: a silent or failing server hands over to the next mirror', async
     [hang, fail, busy, ok].forEach((s) => s.close());
     delete globalThis.__FALL_LINE_TIMEOUT_SCALE;
   }
+});
+
+test('build-data turns OpenSkiMap downloads into an index and per-area files', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fls-data-'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/synthetic-area.json'), 'utf8'));
+  writeOpenSkiMapFixture(path.join(tmp, 'src'), fixture);
+  // Tiny read chunks: features must be reassembled across chunk boundaries.
+  execFileSync('node', [path.join(ROOT, 'scripts/build-data.mjs'), '--source-dir', path.join(tmp, 'src'), '--out', path.join(tmp, 'out')], {
+    env: { ...process.env, BUILD_DATA_CHUNK: '97' },
+    stdio: 'ignore',
+  });
+  const meta = JSON.parse(fs.readFileSync(path.join(tmp, 'out/index.json'), 'utf8'));
+  const at = Object.fromEntries(meta.fields.map((f, i) => [f, i]));
+  const ids = meta.areas.map((a) => a[at.id]);
+  assert.deepEqual(ids.sort(), ['synthetic-test-area', 'zurs'], 'nordic-only and unnamed areas are left out');
+  const peak = meta.areas.find((a) => a[at.id] === 'synthetic-test-area');
+  assert.equal(peak[at.region], 'Vermont');
+  assert.equal(peak[at.maxElevation], 1094);
+  const area = JSON.parse(fs.readFileSync(path.join(tmp, 'out/areas/synthetic-test-area.json'), 'utf8'));
+  assert.equal(area.runs.length, fixture.features.runs.length);
+  assert.equal(area.lifts.length, fixture.features.lifts.length, 'magic carpets and abandoned lifts are dropped');
+  assert.ok(area.runs.every((r) => r.c.every((p) => p.length === 2)), 'elevation stripped');
+  const zurs = JSON.parse(fs.readFileSync(path.join(tmp, 'out/areas/zurs.json'), 'utf8'));
+  assert.deepEqual(zurs.runs.map((r) => r.n), ['Madloch'], 'line runs preferred over area outlines');
+  assert.ok(fs.existsSync(path.join(tmp, 'out/LICENSE.txt')));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('bundled search ranks name matches, ignores accents and finds places', async () => {
+  const { rankAreas } = await import('../js/data/local.js');
+  const mk = (name, region, runCount) => ({ name, key: name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, ''), placeKey: region.toLowerCase(), runCount });
+  const index = [
+    mk('Snow King Mountain', 'wyoming united states', 15),
+    mk('Jackson Hole Mountain Resort', 'wyoming united states', 130),
+    mk('Zurs am Arlberg', 'vorarlberg austria', 40),
+    mk('Hole in the Wall', 'colorado united states', 3),
+  ];
+  assert.equal(rankAreas(index, 'jackson hole')[0].name, 'Jackson Hole Mountain Resort');
+  assert.equal(rankAreas(index, 'Zürs')[0].name, 'Zurs am Arlberg');
+  assert.deepEqual(rankAreas(index, 'wyoming').map((a) => a.name), ['Jackson Hole Mountain Resort', 'Snow King Mountain']);
+  assert.deepEqual(rankAreas(index, 'zzz'), []);
 });

@@ -113,7 +113,7 @@ export function placeLabel(place) {
 export function slugify(s) {
   return String(s || 'design')
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '') || 'design';

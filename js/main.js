@@ -1,6 +1,7 @@
 // App wiring: state, controls, live preview and export.
 
 import { search, loadArea } from './data/index.js';
+import { loadIndex, bundledInfo } from './data/local.js';
 import { buildScene, uphillBearing } from './render/scene.js';
 import { composeDesign } from './render/compose.js';
 import { TEMPLATES, getTemplate } from './render/templates.js';
@@ -12,7 +13,7 @@ import {
 } from './format.js';
 
 // Shown in the footer so a stale cached copy is easy to spot.
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.5.0';
 
 const QUICK_PICKS = ['Mount Snow', 'Killington', 'Stowe', 'Vail', 'Jackson Hole', 'Whistler Blackcomb', 'Zermatt', 'Niseko'];
 const STORAGE_KEY = 'fall-line-studio:v2';
@@ -762,6 +763,11 @@ $('units').addEventListener('change', () => renderFacts());
 // ---------------------------------------------------------------------------
 
 $('app-version').textContent = `v${APP_VERSION}`;
+// Preload the bundled ski-area index (if this deployment has one) and say how fresh it is.
+loadIndex().then(() => {
+  const info = bundledInfo();
+  if (info) $('app-version').textContent = `v${APP_VERSION} · ${info.count.toLocaleString('en-US')} ski areas, data ${info.built.slice(0, 10)}`;
+});
 buildStaticControls();
 wireControls();
 syncControls();

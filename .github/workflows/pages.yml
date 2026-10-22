@@ -1,0 +1,69 @@
+name: pages
+
+# Builds the self-hosted trail data from OpenSkiMap's published GeoJSON
+# downloads and publishes it to GitHub Pages together with the app, so the
+# browser loads trails from this site instead of third-party APIs.
+#
+# One-time setup: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [claude/peaceful-sagan-3veh0b, main]
+  schedule:
+    - cron: '17 4 * * 1' # weekly data refresh, Mondays 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: Rebuild trail data even if this week's copy is cached
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: week
+        run: echo "key=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - id: data-cache
+        uses: actions/cache@v4
+        with:
+          path: _data
+          key: openskimap-data-v1-${{ steps.week.outputs.key }}${{ inputs.refresh && format('-{0}', github.run_id) || '' }}
+      - name: Build trail data from OpenSkiMap downloads
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: node --max-old-space-size=6144 scripts/build-data.mjs --out _data
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp -r index.html css js fonts vendor _site/
+          cp -r _data _site/data
+          touch _site/.nojekyll
+          du -sh _site/data
+          ls _site/data/areas | wc -l
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
